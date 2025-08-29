@@ -143,9 +143,12 @@ static bool runCameraTest(const std::string& cameraSerial,
     // - PixelFormat 0x02180014 为 Mono8（单通道8位），便于直接保存为灰度图
     // - TriggerMode 为 1 表示开启触发模式
     // - TriggerSource 为 7 表示使用软件触发
-    MV_CC_SetEnumValue(handle, "PixelFormat", 0x02180014); // Mono8
+    // 更稳健的配置：优先使用 ByString，避免不同设备枚举值差异
+    MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8");
+    MV_CC_SetEnumValueByString(handle, "TriggerSelector", "FrameStart");
     MV_CC_SetEnumValue(handle, "TriggerMode", 1);          // On
-    MV_CC_SetEnumValue(handle, "TriggerSource", 7);        // Software
+    MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
+    MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
 
     // 4.1) 相机参数：仅当用户提供值时才关闭自动并设置；否则保持当前自动/默认
     // 参数含义与影响（简要）：
@@ -224,7 +227,12 @@ static bool runCameraTest(const std::string& cameraSerial,
     // - 注册图像回调：接收帧数据并保存为 I1..I(总数).png
     CallbackContext ctx;
     ctx.totalFrames = framesToCapture;
-    if (!outputDir.empty()) ctx.saveDir = outputDir; else ctx.saveDir = std::filesystem::current_path().string();
+    if (!outputDir.empty()) {
+        ctx.saveDir = outputDir;
+    } else {
+        // 默认保存到当前目录下的 images 子目录
+        ctx.saveDir = (std::filesystem::current_path() / "images").string();
+    }
     try { std::filesystem::create_directories(ctx.saveDir); } catch (...) {}
 
     // 图像回调：将采集到的帧以灰度图保存
@@ -238,9 +246,10 @@ static bool runCameraTest(const std::string& cameraSerial,
                   << "] Index[" << idx << "/" << c->totalFrames << "]" << std::endl;
         if (idx <= c->totalFrames) {
             cv::Mat img(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC1, pData);
+            cv::Mat imgCopy = img.clone(); // 复制一份，避免回调返回后缓冲区失效
             std::string filename = "I" + std::to_string(idx) + ".png";
             std::string path = (std::filesystem::path(c->saveDir) / filename).string();
-            try { cv::imwrite(path, img); } catch (...) { std::cerr << "保存失败: " << path << std::endl; }
+            try { cv::imwrite(path, imgCopy); } catch (...) { std::cerr << "保存失败: " << path << std::endl; }
         }
     };
 
@@ -261,13 +270,15 @@ static bool runCameraTest(const std::string& cameraSerial,
     }
 
     // 6) 软触发抓拍 N 张
+    // 确保处于连续采集模式
+    MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
     // 每次触发后稍作等待，给数据传输与回调写盘留出时间
     for (int i = 0; i < framesToCapture; ++i) {
         int t = MV_CC_TriggerSoftwareExecute(handle);
         if (t != MV_OK) {
             std::cerr << "软件触发失败(第" << i << ")，错误码: " << t << std::endl;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
     }
 
     // 简单等待回调写盘完成

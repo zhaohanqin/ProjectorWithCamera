@@ -763,15 +763,14 @@ void testProjectorStepWithGeneratedFringes() {
     assertTrue(isSucess, "步进模式开始成功");
     std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-    // 轮询确保共显示完 2*steps 帧
+    // 以固定次数步进，避免按集内计数重置导致的无限循环
+    // 说明：DLPC 的 NumPatDisplayedFromPatSet 在跨 PatternSet 时会从 0 重新计数，
+    // 仅依据该值与总帧数比较会导致死循环。这里采用确定次数的步进策略。
     const int totalFrames = steps * 2;
-    int displayed = projectorDlpcApi->getFlashImgsNum();
-    // 如果 START 已经显示第1帧，则此时 displayed>=1；否则通过 step 推进
-    while (displayed < totalFrames) {
+    for (int i = 0; i < totalFrames; ++i) {
         isSucess = projectorDlpcApi->step();
         assertTrue(isSucess, "步进一步");
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
-        displayed = projectorDlpcApi->getFlashImgsNum();
     }
 
     isSucess = projectorDlpcApi->stop();

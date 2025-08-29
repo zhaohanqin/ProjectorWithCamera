@@ -222,12 +222,12 @@ bool runProjectorCameraCooperation(
             return false;
         }
 
-        // 设置像素格式 Mono8（如不支持，可按需调整）
-        MV_CC_SetEnumValue(cameraHandle, "PixelFormat", 0x02180014);
-        // 设置触发模式：On
+        // 更稳健的触发配置：优先按字符串设置，兼容不同固件枚举
+        MV_CC_SetEnumValueByString(cameraHandle, "PixelFormat", "Mono8");
+        MV_CC_SetEnumValueByString(cameraHandle, "TriggerSelector", "FrameStart");
         MV_CC_SetEnumValue(cameraHandle, "TriggerMode", 1);
-        // 设置触发源：Software
-        MV_CC_SetEnumValue(cameraHandle, "TriggerSource", 7);
+        MV_CC_SetEnumValueByString(cameraHandle, "TriggerSource", "Software");
+        MV_CC_SetEnumValueByString(cameraHandle, "AcquisitionMode", "Continuous");
 
         // ========== 相机参数：曝光/增益/帧率/触发延时 ==========
         // 说明（对协作采集的影响）：
@@ -307,7 +307,8 @@ bool runProjectorCameraCooperation(
         if (!outputDir.empty()) {
             cbCtx.saveDir = outputDir;
         } else {
-            cbCtx.saveDir = std::filesystem::current_path().string();
+            // 默认保存到当前目录下 images 子目录
+            cbCtx.saveDir = (std::filesystem::current_path() / "images").string();
         }
         // 确保目录存在
         try { std::filesystem::create_directories(cbCtx.saveDir); } catch (...) {}
@@ -323,6 +324,7 @@ bool runProjectorCameraCooperation(
             // 仅保存前 totalFrames 张，避免多余帧命名越界
             if (idx <= ctx->totalFrames) {
                 cv::Mat img(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC1, pData);
+                cv::Mat imgCopy = img.clone(); // 复制缓冲，避免回调后内存复用
                 const bool isVertical = idx <= ctx->stepsPerOrientation;
                 const char orient = isVertical ? 'V' : 'H';
                 char nameBuf[32];
@@ -330,7 +332,7 @@ bool runProjectorCameraCooperation(
                 std::string filename = nameBuf;
                 std::string filepath = (std::filesystem::path(ctx->saveDir) / filename).string();
                 try {
-                    cv::imwrite(filepath, img);
+                    cv::imwrite(filepath, imgCopy);
                 } catch (...) {
                     std::cerr << u8"保存图像失败: " << filepath << std::endl;
                 }
@@ -413,7 +415,7 @@ bool runProjectorCameraCooperation(
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(200));
 
-        // 软触发顺序：先步进、等投影到位（getFlashImgsNum增加），再触发相机
+        // 软触发顺序：先步进，按照时序预算等待，再触发相机
         auto waitMsFromTiming = [&](bool vertical){
             int pre = vertical ? patternSets[0].preExposureTime_ : patternSets[1].preExposureTime_;
             int exp = vertical ? patternSets[0].exposureTime_     : patternSets[1].exposureTime_;
@@ -422,37 +424,23 @@ bool runProjectorCameraCooperation(
             if (ms < 1) ms = 1;
             return ms + 10; // 余量
         };
-
-        int lastDisplayed = projector->getFlashImgsNum();
+        // 按固定次数步进，避免依赖会在跨 PatternSet 重置的设备状态计数
         for (int i = 0; i < steps * 2; ++i) {
-            // 先推进到下一帧投影
             if (!projector->step()) {
                 std::cerr << u8"步进第" << i << u8"帧失败" << std::endl;
                 break;
             }
-
-            // 轮询等待显示计数+1（最多等待到参数化的上限）
             const bool isVerticalNow = (i < steps);
-            const int expect = lastDisplayed + 1;
-            const int baseWaitMs = waitMsFromTiming(isVerticalNow);
-            int waited = 0;
-            int displayed = lastDisplayed;
-            while (waited < baseWaitMs + 200) { // 额外200ms上限
-                displayed = projector->getFlashImgsNum();
-                std::cout << "Displayed(pattern idx from set): " << displayed << "/" << (steps*2) << std::endl;
-                if (displayed >= expect) break;
-                std::this_thread::sleep_for(std::chrono::milliseconds(5));
-                waited += 5;
-            }
-            lastDisplayed = displayed;
+            const int waitMs = waitMsFromTiming(isVerticalNow);
+            std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
 
             // 再触发相机（软件触发）
+            MV_CC_SetEnumValueByString(cameraHandle, "AcquisitionMode", "Continuous");
             int tRet = MV_CC_TriggerSoftwareExecute(cameraHandle);
             if (tRet != MV_OK) {
                 std::cerr << u8"第" << i << u8"次软件触发失败，错误码: " << tRet << std::endl;
             }
-            // 适当等待回调完成（根据曝光/传输情况可调整或改为 GetOneFrameTimeout 同步抓取）
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(80));
         }
 
 		// ========== 4) 全部完成，停止投影与断开连接 ==========
