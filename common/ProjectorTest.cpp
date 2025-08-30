@@ -27,6 +27,7 @@
 #include <string>
 #include <cmath>
 #include <cstring>
+#include <algorithm>
 
 // Windows控制台编码设置，解决中文显示乱码问题
 #ifdef _WIN32
@@ -80,7 +81,7 @@ const std::string testProjector4710 = "DLP4710";    // DLP4710芯片投影仪，
 const std::string testProjector3010 = "DLP3010";    // DLP3010芯片投影仪，单通道
 
 // 测试用的图案数据文件路径，包含实际的投影图案文件
-const std::string testData4710 = "../../test/data/4_4710";  // DLP4710测试图案数据路径
+const std::string testData4710 = "../images_Projector";  // DLP4710测试图案数据路径
 const std::string testData3010 = "../../test/data/4_3010";  // DLP3010测试图案数据路径
 
 // ==================== 测试结果统计 ====================
@@ -428,9 +429,9 @@ void testProjectorPopulatePatternTableData() {
     // 分别加载两组图案，每组包含多个图像文件
     for (size_t i = 0; i < imgsPaths.size() / 2; ++i) {
         // 加载第一组图案：从0开始的图像文件
-        imgFirstSet.push_back(cv::imread(testData4710 + "/" + std::to_string(i) + ".bmp", 0));
+        imgFirstSet.push_back(cv::imread(testData4710 + "/I" + std::to_string(i + 1) + ".png", 0));
         // 加载第二组图案：从5开始的图像文件，cv::imread的第二个参数0表示灰度图像
-        imgSecondSet.push_back(cv::imread(testData4710 + "/" + std::to_string(i + 5) + ".bmp", 0));
+        imgSecondSet.push_back(cv::imread(testData4710 + "/I" + std::to_string(i + 5) + ".png", 0));
     }
 
     patternSets[0].imgs_ = imgFirstSet;                                    // 将第一组图像数据设置到第一个图案集
@@ -758,10 +759,14 @@ void testProjectorStepWithGeneratedFringes() {
     isSucess = projectorDlpcApi->populatePatternTableData(patternSets);
     assertTrue(isSucess, "生成条纹数据加载成功");
 
+    // 开启LED并设置亮度（确保投影仪有光源）
+    isSucess = projectorDlpcApi->setLEDCurrent(0.8, 0.8, 0.8); // 设置80%亮度
+    assertTrue(isSucess, "LED亮度设置成功");
+
     // 开始步进模式（非连续）
     isSucess = projectorDlpcApi->project(false);
     assertTrue(isSucess, "步进模式开始成功");
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // 等待投影仪稳定
 
     // 以固定次数步进，避免按集内计数重置导致的无限循环
     // 说明：DLPC 的 NumPatDisplayedFromPatSet 在跨 PatternSet 时会从 0 重新计数，
@@ -769,8 +774,19 @@ void testProjectorStepWithGeneratedFringes() {
     const int totalFrames = steps * 2;
     for (int i = 0; i < totalFrames; ++i) {
         isSucess = projectorDlpcApi->step();
-        assertTrue(isSucess, "步进一步");
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        assertTrue(isSucess, "步进第" + std::to_string(i + 1) + "步");
+        
+        // 等待投影仪完成当前图案的显示
+        // 根据图案的曝光时间计算等待时间
+        const bool isVertical = (i < steps);
+        const int exposureTime = isVertical ? patternSets[0].exposureTime_ : patternSets[1].exposureTime_;
+        const int preTime = isVertical ? patternSets[0].preExposureTime_ : patternSets[1].preExposureTime_;
+        const int postTime = isVertical ? patternSets[0].postExposureTime_ : patternSets[1].postExposureTime_;
+        const int totalTimeMs = (preTime + exposureTime + postTime) / 1000;
+        const int waitTimeMs = (totalTimeMs + 100 > 500) ? (totalTimeMs + 100) : 500; // 额外100ms余量，最少500ms
+        
+        std::cout << "投影第" << (i + 1) << "帧图案，等待" << waitTimeMs << "ms..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
     }
 
     isSucess = projectorDlpcApi->stop();

@@ -369,9 +369,12 @@ static void testCameraConfigureTrigger(const std::string& cameraSerial) {
     if (nRet != MV_OK) { assertTrue(false, "打开相机失败"); MV_CC_DestroyHandle(handle); return; }
 
     bool ok = true;
-    ok = ok && (MV_CC_SetEnumValue(handle, "PixelFormat", 0x02180014) == MV_OK);
-    ok = ok && (MV_CC_SetEnumValue(handle, "TriggerMode", 1) == MV_OK);
-    ok = ok && (MV_CC_SetEnumValue(handle, "TriggerSource", 7) == MV_OK);
+    // 按照工业相机指导文档的正确配置顺序
+    ok = ok && (MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8") == MV_OK);
+    ok = ok && (MV_CC_SetEnumValueByString(handle, "TriggerSelector", "FrameStart") == MV_OK);
+    ok = ok && (MV_CC_SetEnumValue(handle, "TriggerMode", 1) == MV_OK);  // On
+    ok = ok && (MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software") == MV_OK);
+    ok = ok && (MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous") == MV_OK);
     assertTrue(ok, "成功配置 Mono8 + 软件触发");
 
     MV_CC_CloseDevice(handle);
