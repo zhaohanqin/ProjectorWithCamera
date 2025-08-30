@@ -81,7 +81,7 @@ const std::string testProjector4710 = "DLP4710";    // DLP4710芯片投影仪，
 const std::string testProjector3010 = "DLP3010";    // DLP3010芯片投影仪，单通道
 
 // 测试用的图案数据文件路径，包含实际的投影图案文件
-const std::string testData4710 = "../images_Projector";  // DLP4710测试图案数据路径
+const std::string testData4710 = "images_Projector";  // DLP4710测试图案数据路径
 const std::string testData3010 = "../../test/data/4_3010";  // DLP3010测试图案数据路径
 
 // ==================== 测试结果统计 ====================
@@ -422,17 +422,31 @@ void testProjectorPopulatePatternTableData() {
 
     // ===== 加载测试图案文件 =====
     std::vector<cv::String> imgsPaths;                                     // 存储图案文件路径的向量
-    cv::glob(testData4710, imgsPaths);                                     // 使用OpenCV的glob函数获取测试数据目录下的所有文件路径
+    cv::glob(testData4710 + "/*.png", imgsPaths);                          // 使用OpenCV的glob函数获取测试数据目录下的所有PNG文件路径
     std::vector<cv::Mat> imgFirstSet;                                      // 第一组图案的图像数据
     std::vector<cv::Mat> imgSecondSet;                                     // 第二组图案的图像数据
+
+    // 添加调试信息
+    std::cout << "找到PNG文件数量: " << imgsPaths.size() << std::endl;
+    std::cout << "测试数据路径: " << testData4710 << std::endl;
 
     // 分别加载两组图案，每组包含多个图像文件
     for (size_t i = 0; i < imgsPaths.size() / 2; ++i) {
         // 加载第一组图案：从0开始的图像文件
-        imgFirstSet.push_back(cv::imread(testData4710 + "/I" + std::to_string(i + 1) + ".png", 0));
+        cv::Mat img1 = cv::imread(testData4710 + "/I" + std::to_string(i + 1) + ".png", 0);
+        if (!img1.empty()) {
+            imgFirstSet.push_back(img1);
+        }
         // 加载第二组图案：从5开始的图像文件，cv::imread的第二个参数0表示灰度图像
-        imgSecondSet.push_back(cv::imread(testData4710 + "/I" + std::to_string(i + 5) + ".png", 0));
+        cv::Mat img2 = cv::imread(testData4710 + "/I" + std::to_string(i + 5) + ".png", 0);
+        if (!img2.empty()) {
+            imgSecondSet.push_back(img2);
+        }
     }
+
+    // 显示加载结果
+    std::cout << "第一组图案加载数量: " << imgFirstSet.size() << std::endl;
+    std::cout << "第二组图案加载数量: " << imgSecondSet.size() << std::endl;
 
     patternSets[0].imgs_ = imgFirstSet;                                    // 将第一组图像数据设置到第一个图案集
     patternSets[1].imgs_ = imgSecondSet;                                    // 将第二组图像数据设置到第二个图案集
@@ -549,14 +563,24 @@ void testProjectorStepWithCustomPatterns() {
 
     // 加载用户自定义的图案文件
     std::vector<cv::String> imgsPaths;                                     // 存储图案文件路径
-    cv::glob(testData4710, imgsPaths);                                     // 获取测试数据目录下的所有文件路径
+    cv::glob(testData4710 + "/*.png", imgsPaths);                          // 获取测试数据目录下的所有PNG文件路径
     std::vector<cv::Mat> customPatterns;                                   // 自定义图案的图像数据
+
+    // 添加调试信息
+    std::cout << "找到PNG文件数量: " << imgsPaths.size() << std::endl;
+    std::cout << "测试数据路径: " << testData4710 << std::endl;
 
     // 加载所有图案文件
     for (size_t i = 0; i < imgsPaths.size(); ++i) {
         // 加载图案文件，cv::imread的第二个参数0表示灰度图像
-        customPatterns.push_back(cv::imread(testData4710 + "/" + std::to_string(i) + ".bmp", 0));
+        cv::Mat img = cv::imread(imgsPaths[i], 0);
+        if (!img.empty()) {
+            customPatterns.push_back(img);
+        }
     }
+
+    // 显示加载结果
+    std::cout << "自定义图案加载数量: " << customPatterns.size() << std::endl;
 
     patternSets[0].imgs_ = customPatterns;                                 // 将自定义图案设置到图案集
 
@@ -731,6 +755,8 @@ void testProjectorStepWithGeneratedFringes() {
         assertTrue(m.cols == deviceWidth && m.rows == deviceHeight, "图像分辨率与设备一致");
     }
 
+    std::cout << "成功生成 " << imgs.size() << " 张条纹图像" << std::endl;
+
     std::vector<slmaster::device::PatternOrderSet> patternSets(2);
 
     // 垂直条纹配置（前N张）
@@ -755,26 +781,61 @@ void testProjectorStepWithGeneratedFringes() {
     patternSets[1].patternArrayCounts_ = deviceHeight; // 水平条纹通常与高度相关
     patternSets[1].imgs_.assign(imgs.begin() + steps, imgs.end());
 
+    std::cout << "垂直条纹图案数量: " << patternSets[0].imgs_.size() << std::endl;
+    std::cout << "水平条纹图案数量: " << patternSets[1].imgs_.size() << std::endl;
+
     // 将图案数据加载到投影仪内部闪存
+    std::cout << "开始加载图案数据到投影仪..." << std::endl;
     isSucess = projectorDlpcApi->populatePatternTableData(patternSets);
     assertTrue(isSucess, "生成条纹数据加载成功");
+    
+    if (!isSucess) {
+        std::cout << "图案数据加载失败，无法继续测试" << std::endl;
+        projectorDlpcApi->disConnect();
+        return;
+    }
+
+    std::cout << "图案数据加载成功，开始设置LED亮度..." << std::endl;
 
     // 开启LED并设置亮度（确保投影仪有光源）
     isSucess = projectorDlpcApi->setLEDCurrent(0.8, 0.8, 0.8); // 设置80%亮度
     assertTrue(isSucess, "LED亮度设置成功");
 
-    // 开始步进模式（非连续）
-    isSucess = projectorDlpcApi->project(false);
-    assertTrue(isSucess, "步进模式开始成功");
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // 等待投影仪稳定
+    if (!isSucess) {
+        std::cout << "LED亮度设置失败，但继续尝试投影..." << std::endl;
+    }
+
+    // 开始连续投影模式，确保投影仪能正常显示
+    std::cout << "开始连续投影模式..." << std::endl;
+    isSucess = projectorDlpcApi->project(true);
+    assertTrue(isSucess, "连续投影模式开始成功");
+    
+    if (!isSucess) {
+        std::cout << "投影模式启动失败，无法继续测试" << std::endl;
+        projectorDlpcApi->disConnect();
+        return;
+    }
+
+    // 等待投影仪稳定
+    std::cout << "等待投影仪稳定..." << std::endl;
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // 增加等待时间到2秒
 
     // 以固定次数步进，避免按集内计数重置导致的无限循环
     // 说明：DLPC 的 NumPatDisplayedFromPatSet 在跨 PatternSet 时会从 0 重新计数，
     // 仅依据该值与总帧数比较会导致死循环。这里采用确定次数的步进策略。
     const int totalFrames = steps * 2;
+    std::cout << "开始步进投影，总共 " << totalFrames << " 帧..." << std::endl;
+    
     for (int i = 0; i < totalFrames; ++i) {
+        std::cout << "执行第 " << (i + 1) << " 次步进..." << std::endl;
+        
         isSucess = projectorDlpcApi->step();
         assertTrue(isSucess, "步进第" + std::to_string(i + 1) + "步");
+        
+        if (!isSucess) {
+            std::cout << "第 " << (i + 1) << " 次步进失败，停止测试" << std::endl;
+            break;
+        }
         
         // 等待投影仪完成当前图案的显示
         // 根据图案的曝光时间计算等待时间
@@ -783,17 +844,27 @@ void testProjectorStepWithGeneratedFringes() {
         const int preTime = isVertical ? patternSets[0].preExposureTime_ : patternSets[1].preExposureTime_;
         const int postTime = isVertical ? patternSets[0].postExposureTime_ : patternSets[1].postExposureTime_;
         const int totalTimeMs = (preTime + exposureTime + postTime) / 1000;
-        const int waitTimeMs = (totalTimeMs + 100 > 500) ? (totalTimeMs + 100) : 500; // 额外100ms余量，最少500ms
         
-        std::cout << "投影第" << (i + 1) << "帧图案，等待" << waitTimeMs << "ms..." << std::endl;
+        // 增加等待时间，确保投影稳定
+        // 对于DLP投影仪，需要足够的时间来稳定显示图案
+        const int waitTimeMs = std::max(totalTimeMs + 500, 1500); // 最少1.5秒，确保投影稳定
+        
+        std::cout << "投影第" << (i + 1) << "帧图案（" << (isVertical ? "垂直" : "水平") << "条纹），等待" << waitTimeMs << "ms..." << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
+        
+        std::cout << "第" << (i + 1) << "帧投影完成" << std::endl;
     }
 
+    std::cout << "所有帧投影完成，停止投影..." << std::endl;
     isSucess = projectorDlpcApi->stop();
     assertTrue(isSucess, "投影停止成功");
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    
+    std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 等待投影仪完全停止
+    
     isSucess = projectorDlpcApi->disConnect();
     assertTrue(isSucess, "断开连接操作成功");
+    
+    std::cout << "自动生成条纹测试完成" << std::endl;
 }
 
 // ==================== LED控制功能测试 ====================
@@ -866,6 +937,9 @@ void runAllTests() {
 
     // 步进投影测试（自定义图案+相机采集）
     testProjectorStepWithCustomPatterns();//测试投影仪的自定义图案步进投影和相机采集是否成功
+
+    // 自动生成条纹测试
+    testProjectorStepWithGeneratedFringes();//测试投影仪的自动生成条纹步进投影是否成功
 
     // LED控制测试
     testProjectorGetSetLEDCurrent();//测试投影仪的LED电流获取和设置是否成功

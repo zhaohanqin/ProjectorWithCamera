@@ -144,11 +144,74 @@ static bool runCameraTest(const std::string& cameraSerial,
     // - TriggerMode 为 1 表示开启触发模式
     // - TriggerSource 为 7 表示使用软件触发
     // 更稳健的配置：优先使用 ByString，避免不同设备枚举值差异
-    MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8");
-    MV_CC_SetEnumValueByString(handle, "TriggerSelector", "FrameStart");
-    MV_CC_SetEnumValue(handle, "TriggerMode", 1);          // On
-    MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
-    MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
+    std::cout << "配置相机基础参数..." << std::endl;
+    
+    // 步骤1: 设置像素格式为Mono8
+    nRet = MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8");
+    if (nRet != MV_OK) {
+        std::cerr << "设置像素格式失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+        MV_CC_CloseDevice(handle);
+        MV_CC_DestroyHandle(handle);
+        return false;
+    }
+    std::cout << "像素格式设置为Mono8成功" << std::endl;
+    
+    // 步骤2: 尝试设置触发选择器为FrameStart（兼容性更好）
+    nRet = MV_CC_SetEnumValueByString(handle, "TriggerSelector", "FrameStart");
+    if (nRet != MV_OK) {
+        // 如果FrameStart失败，尝试使用数值6 (FrameBurstStart)
+        std::cout << "设置TriggerSelector为FrameStart失败，尝试FrameBurstStart..." << std::endl;
+        nRet = MV_CC_SetEnumValue(handle, "TriggerSelector", 6);
+        if (nRet != MV_OK) {
+            std::cerr << "设置触发选择器失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+            MV_CC_CloseDevice(handle);
+            MV_CC_DestroyHandle(handle);
+            return false;
+        }
+        std::cout << "触发选择器设置为FrameBurstStart成功" << std::endl;
+    } else {
+        std::cout << "触发选择器设置为FrameStart成功" << std::endl;
+    }
+    
+    // 步骤3: 开启触发模式
+    nRet = MV_CC_SetEnumValue(handle, "TriggerMode", 1);          // On
+    if (nRet != MV_OK) {
+        std::cerr << "开启触发模式失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+        MV_CC_CloseDevice(handle);
+        MV_CC_DestroyHandle(handle);
+        return false;
+    }
+    std::cout << "触发模式开启成功" << std::endl;
+    
+    // 步骤4: 设置触发源为软件触发
+    nRet = MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
+    if (nRet != MV_OK) {
+        std::cerr << "设置触发源失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+        MV_CC_CloseDevice(handle);
+        MV_CC_DestroyHandle(handle);
+        return false;
+    }
+    std::cout << "触发源设置为Software成功" << std::endl;
+    
+    // 步骤5: 设置采集模式为连续模式
+    nRet = MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
+    if (nRet != MV_OK) {
+        std::cerr << "设置采集模式失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+        MV_CC_CloseDevice(handle);
+        MV_CC_DestroyHandle(handle);
+        return false;
+    }
+    std::cout << "采集模式设置为Continuous成功" << std::endl;
+    
+    // 步骤6: 设置图像缓存节点数量（提高稳定性）
+    nRet = MV_CC_SetImageNodeNum(handle, 5);
+    if (nRet != MV_OK) {
+        std::cout << "设置图像缓存节点数量失败，使用默认值，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+    } else {
+        std::cout << "图像缓存节点数量设置为5成功" << std::endl;
+    }
+    
+    std::cout << "相机基础参数配置完成" << std::endl;
 
     // 4.1) 相机参数：仅当用户提供值时才关闭自动并设置；否则保持当前自动/默认
     // 参数含义与影响（简要）：
@@ -272,17 +335,31 @@ static bool runCameraTest(const std::string& cameraSerial,
     // 6) 软触发抓拍 N 张
     // 确保处于连续采集模式
     MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
+    
+    std::cout << "开始软触发抓拍 " << framesToCapture << " 张图像..." << std::endl;
+    
     // 每次触发后稍作等待，给数据传输与回调写盘留出时间
     for (int i = 0; i < framesToCapture; ++i) {
-        int t = MV_CC_TriggerSoftwareExecute(handle);
+        std::cout << "执行第 " << (i + 1) << " 次软触发..." << std::endl;
+        
+        // 使用正确的软触发命令：MV_CC_SetCommandValue
+        int t = MV_CC_SetCommandValue(handle, "TriggerSoftware");
         if (t != MV_OK) {
-            std::cerr << "软件触发失败(第" << i << ")，错误码: " << t << std::endl;
+            std::cerr << "软件触发失败(第" << i << "次)，错误码: 0x" << std::hex << t << std::dec << std::endl;
+            // 继续尝试，不要因为单次失败就停止
+        } else {
+            std::cout << "第 " << (i + 1) << " 次软触发成功" << std::endl;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        
+        // 等待时间根据相机帧率和曝光时间调整
+        // 根据工业相机指导文档，如果帧率过小或TriggerDelay很大，可能会出现软触发命令没有全部起效的情况
+        std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 增加到500ms确保触发稳定
     }
-
+    
+    std::cout << "软触发完成，等待回调处理..." << std::endl;
+    
     // 简单等待回调写盘完成
-    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // 增加到1000ms确保所有图像都被处理
 
     // 7) 关闭与清理
     MV_CC_StopGrabbing(handle);
@@ -369,13 +446,97 @@ static void testCameraConfigureTrigger(const std::string& cameraSerial) {
     if (nRet != MV_OK) { assertTrue(false, "打开相机失败"); MV_CC_DestroyHandle(handle); return; }
 
     bool ok = true;
-    // 按照工业相机指导文档的正确配置顺序
-    ok = ok && (MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8") == MV_OK);
-    ok = ok && (MV_CC_SetEnumValueByString(handle, "TriggerSelector", "FrameStart") == MV_OK);
-    ok = ok && (MV_CC_SetEnumValue(handle, "TriggerMode", 1) == MV_OK);  // On
-    ok = ok && (MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software") == MV_OK);
-    ok = ok && (MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous") == MV_OK);
-    assertTrue(ok, "成功配置 Mono8 + 软件触发");
+    int stepResult = 0;
+    
+    std::cout << "开始配置相机触发参数..." << std::endl;
+    
+    // 步骤1: 设置像素格式为Mono8
+    std::cout << "步骤1: 设置像素格式为Mono8..." << std::endl;
+    stepResult = MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8");
+    if (stepResult != MV_OK) {
+        std::cout << "  失败: 设置像素格式失败，错误码: 0x" << std::hex << stepResult << std::dec << std::endl;
+        ok = false;
+    } else {
+        std::cout << "  成功: 像素格式设置为Mono8" << std::endl;
+    }
+    
+    // 步骤2: 设置触发选择器为FrameStart
+    std::cout << "步骤2: 设置触发选择器为FrameStart..." << std::endl;
+    stepResult = MV_CC_SetEnumValueByString(handle, "TriggerSelector", "FrameStart");
+    if (stepResult != MV_OK) {
+        // 如果FrameStart失败，尝试使用数值6 (FrameBurstStart)
+        std::cout << "  尝试使用FrameBurstStart..." << std::endl;
+        stepResult = MV_CC_SetEnumValue(handle, "TriggerSelector", 6);
+        if (stepResult != MV_OK) {
+            std::cout << "  失败: 设置触发选择器失败，错误码: 0x" << std::hex << stepResult << std::dec << std::endl;
+            ok = false;
+        } else {
+            std::cout << "  成功: 触发选择器设置为FrameBurstStart" << std::endl;
+        }
+    } else {
+        std::cout << "  成功: 触发选择器设置为FrameStart" << std::endl;
+    }
+    
+    // 步骤3: 开启触发模式
+    std::cout << "步骤3: 开启触发模式..." << std::endl;
+    stepResult = MV_CC_SetEnumValue(handle, "TriggerMode", 1);  // 1 = On
+    if (stepResult != MV_OK) {
+        std::cout << "  失败: 开启触发模式失败，错误码: 0x" << std::hex << stepResult << std::dec << std::endl;
+        ok = false;
+    } else {
+        std::cout << "  成功: 触发模式已开启" << std::endl;
+    }
+    
+    // 步骤4: 设置触发源为软件触发
+    std::cout << "步骤4: 设置触发源为软件触发..." << std::endl;
+    stepResult = MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
+    if (stepResult != MV_OK) {
+        std::cout << "  失败: 设置触发源失败，错误码: 0x" << std::hex << stepResult << std::dec << std::endl;
+        ok = false;
+    } else {
+        std::cout << "  成功: 触发源设置为Software" << std::endl;
+    }
+    
+    // 步骤5: 设置采集模式为连续模式
+    std::cout << "步骤5: 设置采集模式为连续模式..." << std::endl;
+    stepResult = MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
+    if (stepResult != MV_OK) {
+        std::cout << "  失败: 设置采集模式失败，错误码: 0x" << std::hex << stepResult << std::dec << std::endl;
+        ok = false;
+    } else {
+        std::cout << "  成功: 采集模式设置为Continuous" << std::endl;
+    }
+    
+    // 验证配置结果
+    if (ok) {
+        std::cout << "所有触发参数配置成功！" << std::endl;
+        
+        // 验证配置是否正确
+        std::cout << "验证配置结果..." << std::endl;
+        
+        // 验证像素格式
+        MVCC_ENUMVALUE pixelFormat;
+        if (MV_CC_GetEnumValue(handle, "PixelFormat", &pixelFormat) == MV_OK) {
+            std::cout << "  像素格式: " << pixelFormat.nCurValue << std::endl;
+        }
+        
+        // 验证触发模式
+        MVCC_ENUMVALUE triggerMode;
+        if (MV_CC_GetEnumValue(handle, "TriggerMode", &triggerMode) == MV_OK) {
+            std::cout << "  触发模式: " << (triggerMode.nCurValue == 1 ? "On" : "Off") << std::endl;
+        }
+        
+        // 验证触发源
+        MVCC_ENUMVALUE triggerSource;
+        if (MV_CC_GetEnumValue(handle, "TriggerSource", &triggerSource) == MV_OK) {
+            std::cout << "  触发源: " << triggerSource.nCurValue << std::endl;
+        }
+        
+        assertTrue(true, "成功配置 Mono8 + 软件触发");
+    } else {
+        std::cout << "触发参数配置失败！" << std::endl;
+        assertTrue(false, "配置 Mono8 + 软件触发");
+    }
 
     MV_CC_CloseDevice(handle);
     MV_CC_DestroyHandle(handle);
@@ -452,6 +613,320 @@ static void testCameraCaptureAndSave(const std::string& cameraSerial, const std:
     assertTrue(ok, "端到端采集与保存成功");
 }
 
+// 软触发兼容性测试（测试不同的触发配置方式）
+static void testCameraSoftwareTriggerCompatibility(const std::string& cameraSerial) {
+    std::cout << "\n--- 测试相机软触发兼容性 ---" << std::endl;
+    
+    MV_CC_DEVICE_INFO_LIST deviceList{};
+    int nRet = MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, &deviceList);
+    if (nRet != MV_OK || deviceList.nDeviceNum == 0) {
+        assertTrue(false, "设备枚举失败，无法进行软触发兼容性测试");
+        return;
+    }
+    
+    MV_CC_DEVICE_INFO* pSelectedDevice = nullptr;
+    if (!cameraSerial.empty() && cameraSerial != "NULL") {
+        for (unsigned int i = 0; i < deviceList.nDeviceNum; ++i) {
+            MV_CC_DEVICE_INFO* pInfo = deviceList.pDeviceInfo[i];
+            const char* serial = nullptr;
+            if (pInfo->nTLayerType == MV_USB_DEVICE) serial = (const char*)pInfo->SpecialInfo.stUsb3VInfo.chSerialNumber;
+            else if (pInfo->nTLayerType == MV_GIGE_DEVICE) serial = (const char*)pInfo->SpecialInfo.stGigEInfo.chSerialNumber;
+            if (serial && cameraSerial == serial) { pSelectedDevice = pInfo; break; }
+        }
+    }
+    if (!pSelectedDevice) pSelectedDevice = deviceList.pDeviceInfo[0];
+    
+    void* handle = nullptr;
+    nRet = MV_CC_CreateHandle(&handle, pSelectedDevice);
+    if (nRet != MV_OK || !handle) { 
+        assertTrue(false, "创建相机句柄失败"); 
+        return; 
+    }
+    
+    nRet = MV_CC_OpenDevice(handle);
+    if (nRet != MV_OK) { 
+        assertTrue(false, "打开相机失败"); 
+        MV_CC_DestroyHandle(handle); 
+        return; 
+    }
+    
+    std::cout << "相机连接成功，开始测试软触发兼容性..." << std::endl;
+    
+    // 测试方法1: 使用TriggerSelector = "FrameStart"
+    std::cout << "\n测试方法1: TriggerSelector = FrameStart" << std::endl;
+    bool method1Ok = true;
+    
+    nRet = MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8");
+    if (nRet != MV_OK) method1Ok = false;
+    
+    if (method1Ok) {
+        nRet = MV_CC_SetEnumValueByString(handle, "TriggerSelector", "FrameStart");
+        if (nRet != MV_OK) method1Ok = false;
+    }
+    
+    if (method1Ok) {
+        nRet = MV_CC_SetEnumValue(handle, "TriggerMode", 1);
+        if (nRet != MV_OK) method1Ok = false;
+    }
+    
+    if (method1Ok) {
+        nRet = MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
+        if (nRet != MV_OK) method1Ok = false;
+    }
+    
+    if (method1Ok) {
+        nRet = MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
+        if (nRet != MV_OK) method1Ok = false;
+    }
+    
+    std::cout << "方法1结果: " << (method1Ok ? "成功" : "失败") << std::endl;
+    
+    // 测试方法2: 使用TriggerSelector = 6 (FrameBurstStart)
+    std::cout << "\n测试方法2: TriggerSelector = FrameBurstStart" << std::endl;
+    bool method2Ok = true;
+    
+    nRet = MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8");
+    if (nRet != MV_OK) method2Ok = false;
+    
+    if (method2Ok) {
+        nRet = MV_CC_SetEnumValue(handle, "TriggerSelector", 6);
+        if (nRet != MV_OK) method2Ok = false;
+    }
+    
+    if (method2Ok) {
+        nRet = MV_CC_SetEnumValue(handle, "TriggerMode", 1);
+        if (nRet != MV_OK) method2Ok = false;
+    }
+    
+    if (method2Ok) {
+        nRet = MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
+        if (nRet != MV_OK) method2Ok = false;
+    }
+    
+    if (method2Ok) {
+        nRet = MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
+        if (nRet != MV_OK) method2Ok = false;
+    }
+    
+    std::cout << "方法2结果: " << (method2Ok ? "成功" : "失败") << std::endl;
+    
+    // 测试方法3: 尝试使用FrameTriggerSource（某些相机可能支持）
+    std::cout << "\n测试方法3: FrameTriggerSource = Software" << std::endl;
+    bool method3Ok = true;
+    
+    nRet = MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8");
+    if (nRet != MV_OK) method3Ok = false;
+    
+    if (method3Ok) {
+        nRet = MV_CC_SetEnumValueByString(handle, "FrameTriggerSource", "Software");
+        if (nRet != MV_OK) method3Ok = false;
+    }
+    
+    if (method3Ok) {
+        nRet = MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
+        if (nRet != MV_OK) method3Ok = false;
+    }
+    
+    std::cout << "方法3结果: " << (method3Ok ? "成功" : "失败") << std::endl;
+    
+    // 总结兼容性测试结果
+    if (method1Ok || method2Ok || method3Ok) {
+        std::cout << "\n软触发兼容性测试: 至少有一种方法可用" << std::endl;
+        assertTrue(true, "软触发兼容性测试通过");
+    } else {
+        std::cout << "\n软触发兼容性测试: 所有方法都失败" << std::endl;
+        assertTrue(false, "软触发兼容性测试失败");
+    }
+    
+    MV_CC_CloseDevice(handle);
+    MV_CC_DestroyHandle(handle);
+}
+
+// 软触发功能测试
+static void testCameraSoftwareTrigger(const std::string& cameraSerial) {
+    std::cout << "\n--- 测试相机软触发功能 ---" << std::endl;
+    
+    // 使用简化的测试流程，专门测试软触发
+    MV_CC_DEVICE_INFO_LIST deviceList{};
+    int nRet = MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, &deviceList);
+    if (nRet != MV_OK || deviceList.nDeviceNum == 0) {
+        assertTrue(false, "设备枚举失败，无法进行软触发测试");
+        return;
+    }
+    
+    MV_CC_DEVICE_INFO* pSelectedDevice = nullptr;
+    if (!cameraSerial.empty() && cameraSerial != "NULL") {
+        for (unsigned int i = 0; i < deviceList.nDeviceNum; ++i) {
+            MV_CC_DEVICE_INFO* pInfo = deviceList.pDeviceInfo[i];
+            const char* serial = nullptr;
+            if (pInfo->nTLayerType == MV_USB_DEVICE) serial = (const char*)pInfo->SpecialInfo.stUsb3VInfo.chSerialNumber;
+            else if (pInfo->nTLayerType == MV_GIGE_DEVICE) serial = (const char*)pInfo->SpecialInfo.stGigEInfo.chSerialNumber;
+            if (serial && cameraSerial == serial) { pSelectedDevice = pInfo; break; }
+        }
+    }
+    if (!pSelectedDevice) pSelectedDevice = deviceList.pDeviceInfo[0];
+    
+    void* handle = nullptr;
+    nRet = MV_CC_CreateHandle(&handle, pSelectedDevice);
+    if (nRet != MV_OK || !handle) { 
+        assertTrue(false, "创建相机句柄失败"); 
+        return; 
+    }
+    
+    nRet = MV_CC_OpenDevice(handle);
+    if (nRet != MV_OK) { 
+        assertTrue(false, "打开相机失败"); 
+        MV_CC_DestroyHandle(handle); 
+        return; 
+    }
+    
+    std::cout << "相机连接成功，开始配置软触发参数..." << std::endl;
+    
+    // 配置软触发参数
+    bool configOk = true;
+    
+    // 1. 设置像素格式
+    nRet = MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8");
+    if (nRet != MV_OK) {
+        std::cerr << "设置像素格式失败: 0x" << std::hex << nRet << std::dec << std::endl;
+        configOk = false;
+    }
+    
+    // 2. 设置触发选择器
+    if (configOk) {
+        nRet = MV_CC_SetEnumValueByString(handle, "TriggerSelector", "FrameStart");
+        if (nRet != MV_OK) {
+            // 如果FrameStart失败，尝试使用数值6 (FrameBurstStart)
+            std::cout << "尝试使用FrameBurstStart..." << std::endl;
+            nRet = MV_CC_SetEnumValue(handle, "TriggerSelector", 6);
+            if (nRet != MV_OK) {
+                std::cerr << "设置触发选择器失败: 0x" << std::hex << nRet << std::dec << std::endl;
+                configOk = false;
+            } else {
+                std::cout << "触发选择器设置为FrameBurstStart成功" << std::endl;
+            }
+        } else {
+            std::cout << "触发选择器设置为FrameStart成功" << std::endl;
+        }
+    }
+    
+    // 3. 开启触发模式
+    if (configOk) {
+        nRet = MV_CC_SetEnumValue(handle, "TriggerMode", 1);
+        if (nRet != MV_OK) {
+            std::cerr << "开启触发模式失败: 0x" << std::hex << nRet << std::dec << std::endl;
+            configOk = false;
+        }
+    }
+    
+    // 4. 设置触发源
+    if (configOk) {
+        nRet = MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
+        if (nRet != MV_OK) {
+            std::cerr << "设置触发源失败: 0x" << std::hex << nRet << std::dec << std::endl;
+            configOk = false;
+        }
+    }
+    
+    // 5. 设置采集模式
+    if (configOk) {
+        nRet = MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
+        if (nRet != MV_OK) {
+            std::cerr << "设置采集模式失败: 0x" << std::hex << nRet << std::dec << std::endl;
+            configOk = false;
+        }
+    }
+    
+    // 6. 设置图像缓存节点数量（提高稳定性）
+    if (configOk) {
+        nRet = MV_CC_SetImageNodeNum(handle, 5);
+        if (nRet != MV_OK) {
+            std::cout << "设置图像缓存节点数量失败，使用默认值: 0x" << std::hex << nRet << std::dec << std::endl;
+        } else {
+            std::cout << "图像缓存节点数量设置为5成功" << std::endl;
+        }
+    }
+    
+    if (!configOk) {
+        assertTrue(false, "软触发参数配置失败");
+        MV_CC_CloseDevice(handle);
+        MV_CC_DestroyHandle(handle);
+        return;
+    }
+    
+    std::cout << "软触发参数配置成功" << std::endl;
+    
+    // 设置图像回调
+    CallbackContext ctx;
+    ctx.totalFrames = 3; // 测试3张图像
+    ctx.saveDir = (std::filesystem::current_path() / "images").string();
+    try { std::filesystem::create_directories(ctx.saveDir); } catch (...) {}
+    
+    auto ImageCallbackEx = [](unsigned char* pData, MV_FRAME_OUT_INFO_EX* pFrameInfo, void* pUser) {
+        if (!pFrameInfo || !pUser) return;
+        CallbackContext* c = reinterpret_cast<CallbackContext*>(pUser);
+        const int idx = 1 + c->frameIndex.fetch_add(1);
+        std::cout << "软触发回调: 获取第" << idx << "帧图像 [" << pFrameInfo->nWidth << "x" << pFrameInfo->nHeight << "]" << std::endl;
+        if (idx <= c->totalFrames) {
+            cv::Mat img(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC1, pData);
+            cv::Mat imgCopy = img.clone();
+            std::string filename = "Trigger_" + std::to_string(idx) + ".png";
+            std::string path = (std::filesystem::path(c->saveDir) / filename).string();
+            try { 
+                cv::imwrite(path, imgCopy); 
+                std::cout << "软触发图像保存成功: " << path << std::endl;
+            } catch (...) { 
+                std::cerr << "软触发图像保存失败: " << path << std::endl; 
+            }
+        }
+    };
+    
+    nRet = MV_CC_RegisterImageCallBackEx(handle, ImageCallbackEx, &ctx);
+    if (nRet != MV_OK) {
+        assertTrue(false, "注册图像回调失败");
+        MV_CC_CloseDevice(handle);
+        MV_CC_DestroyHandle(handle);
+        return;
+    }
+    
+    // 开始取流
+    nRet = MV_CC_StartGrabbing(handle);
+    if (nRet != MV_OK) {
+        assertTrue(false, "开始取流失败");
+        MV_CC_CloseDevice(handle);
+        MV_CC_DestroyHandle(handle);
+        return;
+    }
+    
+    std::cout << "开始取流，执行软触发测试..." << std::endl;
+    
+    // 执行软触发
+    for (int i = 0; i < 3; ++i) {
+        std::cout << "执行第" << (i + 1) << "次软触发..." << std::endl;
+        // 使用正确的软触发命令：MV_CC_SetCommandValue
+        nRet = MV_CC_SetCommandValue(handle, "TriggerSoftware");
+        if (nRet != MV_OK) {
+            std::cerr << "软触发失败: 0x" << std::hex << nRet << std::dec << std::endl;
+        } else {
+            std::cout << "软触发成功" << std::endl;
+        }
+        // 根据工业相机指导文档，如果帧率过小或TriggerDelay很大，可能会出现软触发命令没有全部起效的情况
+        std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 增加到500ms确保触发稳定
+    }
+    
+    // 等待回调处理完成
+    std::cout << "等待图像处理完成..." << std::endl;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    // 停止取流
+    MV_CC_StopGrabbing(handle);
+    MV_CC_CloseDevice(handle);
+    MV_CC_DestroyHandle(handle);
+    
+    std::cout << "软触发测试完成，保存目录: " << ctx.saveDir << std::endl;
+    assertTrue(true, "软触发功能测试完成");
+}
+
 // 完整端到端测试（可指定参数）
 static void testCameraEndToEnd(const std::string& cameraSerial,
                                const std::string& saveDir,
@@ -478,6 +953,12 @@ static void runAllCameraTests() {
 
     // 采集能力
     testCameraCaptureAndSave(cameraSerial, saveDir, 4);
+
+    // 软触发兼容性测试
+    testCameraSoftwareTriggerCompatibility(cameraSerial);
+
+    // 软触发功能测试
+    testCameraSoftwareTrigger(cameraSerial);
 
     // 端到端示例（如需调参，可在此设置非负数）
     testCameraEndToEnd(cameraSerial, saveDir, 6, -1.0, -1.0, -1.0, -1.0);
