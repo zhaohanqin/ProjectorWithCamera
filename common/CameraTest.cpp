@@ -4,27 +4,28 @@
 // 2) 打开设备、配置为软件触发 Mono8
 // 3) 注册回调并软触发抓拍 N 张图像，保存为 I1..IN.png 到指定目录（或当前目录）
 
-#include "MvCameraControl.h"
-
 #include <iostream>
 #include <string>
+#include <vector>
 #include <atomic>
-#include <filesystem>
 #include <thread>
 #include <chrono>
-// 为使用 std::min/std::max 添加头文件
 #include <algorithm>
+#include <filesystem>
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 
 #if defined(_WIN32)
 // 避免 Windows 宏 min/max 与 std::min/std::max 冲突
-#ifndef NOMINMAX
 #define NOMINMAX
-#endif
 #include <windows.h>
+#else
+#include <unistd.h>
+#define Sleep(ms) usleep((ms) * 1000)
 #endif
+
+#include "MvCameraControl.h"
 
 // 简易测试框架（与 ProjectorTest.cpp 风格一致）
 struct TestResults {
@@ -74,6 +75,29 @@ struct CallbackContext {
     int totalFrames{0};
     std::string saveDir;
 };
+
+// 图像回调函数：将采集到的帧以灰度图保存
+// 注意：SDK在回调中提供的缓冲区在返回后可能失效，本处直接在回调中同步写盘
+static void ImageCallbackEx(unsigned char* pData, MV_FRAME_OUT_INFO_EX* pFrameInfo, void* pUser) {
+    if (!pFrameInfo || !pUser) return;
+    CallbackContext* c = reinterpret_cast<CallbackContext*>(pUser);
+    const int idx = 1 + c->frameIndex.fetch_add(1);
+    std::cout << "Get One Frame: W[" << pFrameInfo->nWidth
+              << "] H[" << pFrameInfo->nHeight
+              << "] Index[" << idx << "/" << c->totalFrames << "]" << std::endl;
+    if (idx <= c->totalFrames) {
+        cv::Mat img(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC1, pData);
+        cv::Mat imgCopy = img.clone(); // 复制一份，避免回调返回后缓冲区失效
+        std::string filename = "I" + std::to_string(idx) + ".png";
+        std::string path = (std::filesystem::path(c->saveDir) / filename).string();
+        try { 
+            cv::imwrite(path, imgCopy); 
+            std::cout << "图像保存成功: " << path << std::endl;
+        } catch (...) { 
+            std::cerr << "保存失败: " << path << std::endl; 
+        }
+    }
+}
 
 // 运行相机连接与图像采集测试
 // 参数：
@@ -298,24 +322,6 @@ static bool runCameraTest(const std::string& cameraSerial,
     }
     try { std::filesystem::create_directories(ctx.saveDir); } catch (...) {}
 
-    // 图像回调：将采集到的帧以灰度图保存
-    // 注意：SDK在回调中提供的缓冲区在返回后可能失效，本处直接在回调中同步写盘
-    auto ImageCallbackEx = [](unsigned char* pData, MV_FRAME_OUT_INFO_EX* pFrameInfo, void* pUser) {
-        if (!pFrameInfo || !pUser) return;
-        CallbackContext* c = reinterpret_cast<CallbackContext*>(pUser);
-        const int idx = 1 + c->frameIndex.fetch_add(1);
-        std::cout << "Get One Frame: W[" << pFrameInfo->nWidth
-                  << "] H[" << pFrameInfo->nHeight
-                  << "] Index[" << idx << "/" << c->totalFrames << "]" << std::endl;
-        if (idx <= c->totalFrames) {
-            cv::Mat img(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC1, pData);
-            cv::Mat imgCopy = img.clone(); // 复制一份，避免回调返回后缓冲区失效
-            std::string filename = "I" + std::to_string(idx) + ".png";
-            std::string path = (std::filesystem::path(c->saveDir) / filename).string();
-            try { cv::imwrite(path, imgCopy); } catch (...) { std::cerr << "保存失败: " << path << std::endl; }
-        }
-    };
-
     nRet = MV_CC_RegisterImageCallBackEx(handle, ImageCallbackEx, &ctx);
     if (nRet != MV_OK) {
         std::cerr << "注册回调失败，错误码: " << nRet << std::endl;
@@ -333,27 +339,37 @@ static bool runCameraTest(const std::string& cameraSerial,
     }
 
     // 6) 软触发抓拍 N 张
-    // 确保处于连续采集模式
-    MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
-    
     std::cout << "开始软触发抓拍 " << framesToCapture << " 张图像..." << std::endl;
     
-    // 每次触发后稍作等待，给数据传输与回调写盘留出时间
-    for (int i = 0; i < framesToCapture; ++i) {
+    for (int i = 0; i < framesToCapture; i++) {
         std::cout << "执行第 " << (i + 1) << " 次软触发..." << std::endl;
         
-        // 使用正确的软触发命令：MV_CC_SetCommandValue
-        int t = MV_CC_SetCommandValue(handle, "TriggerSoftware");
-        if (t != MV_OK) {
-            std::cerr << "软件触发失败(第" << i << "次)，错误码: 0x" << std::hex << t << std::dec << std::endl;
-            // 继续尝试，不要因为单次失败就停止
+        // 根据TriggerSelector设置选择正确的软触发命令
+        std::string triggerCommand;
+        MVCC_ENUMVALUE triggerSelector;
+        nRet = MV_CC_GetEnumValue(handle, "TriggerSelector", &triggerSelector);
+        if (nRet == MV_OK) {
+            if (triggerSelector.nCurValue == 0) {  // FrameStart
+                triggerCommand = "FrameTriggerSoftware";
+            } else {
+                triggerCommand = "TriggerSoftware";  // 用于FrameBurstStart等
+            }
         } else {
-            std::cout << "第 " << (i + 1) << " 次软触发成功" << std::endl;
+            triggerCommand = "TriggerSoftware";  // 默认使用
         }
         
-        // 等待时间根据相机帧率和曝光时间调整
+        // 使用正确的软触发命令：MV_CC_SetCommandValue
+        nRet = MV_CC_SetCommandValue(handle, triggerCommand.c_str());
+        if (nRet != MV_OK) {
+            std::cerr << "软触发失败: 0x" << std::hex << nRet << std::dec << std::endl;
+            return false;
+        }
+        
+        std::cout << "第 " << (i + 1) << " 次软触发成功" << std::endl;
+        
         // 根据工业相机指导文档，如果帧率过小或TriggerDelay很大，可能会出现软触发命令没有全部起效的情况
-        std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 增加到500ms确保触发稳定
+        // 添加适当的延时确保触发命令生效
+        Sleep(100);  // 延时100ms，可根据实际情况调整
     }
     
     std::cout << "软触发完成，等待回调处理..." << std::endl;
@@ -661,22 +677,27 @@ static void testCameraSoftwareTriggerCompatibility(const std::string& cameraSeri
     
     if (method1Ok) {
         nRet = MV_CC_SetEnumValueByString(handle, "TriggerSelector", "FrameStart");
-        if (nRet != MV_OK) method1Ok = false;
-    }
-    
-    if (method1Ok) {
-        nRet = MV_CC_SetEnumValue(handle, "TriggerMode", 1);
-        if (nRet != MV_OK) method1Ok = false;
-    }
-    
-    if (method1Ok) {
-        nRet = MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
-        if (nRet != MV_OK) method1Ok = false;
-    }
-    
-    if (method1Ok) {
-        nRet = MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
-        if (nRet != MV_OK) method1Ok = false;
+        if (nRet == MV_OK) {
+            std::cout << "TriggerSelector设置为FrameStart成功" << std::endl;
+            nRet = MV_CC_SetEnumValueByString(handle, "TriggerMode", "On");
+            if (nRet == MV_OK) {
+                std::cout << "TriggerMode设置为On成功" << std::endl;
+                nRet = MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
+                if (nRet == MV_OK) {
+                    std::cout << "TriggerSource设置为Software成功" << std::endl;
+                    method1Ok = true;
+                } else {
+                    std::cout << "TriggerSource设置失败" << std::endl;
+                    method1Ok = false;
+                }
+            } else {
+                std::cout << "TriggerMode设置失败" << std::endl;
+                method1Ok = false;
+            }
+        } else {
+            std::cout << "TriggerSelector设置失败" << std::endl;
+            method1Ok = false;
+        }
     }
     
     std::cout << "方法1结果: " << (method1Ok ? "成功" : "失败") << std::endl;
@@ -690,22 +711,27 @@ static void testCameraSoftwareTriggerCompatibility(const std::string& cameraSeri
     
     if (method2Ok) {
         nRet = MV_CC_SetEnumValue(handle, "TriggerSelector", 6);
-        if (nRet != MV_OK) method2Ok = false;
-    }
-    
-    if (method2Ok) {
-        nRet = MV_CC_SetEnumValue(handle, "TriggerMode", 1);
-        if (nRet != MV_OK) method2Ok = false;
-    }
-    
-    if (method2Ok) {
-        nRet = MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
-        if (nRet != MV_OK) method2Ok = false;
-    }
-    
-    if (method2Ok) {
-        nRet = MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
-        if (nRet != MV_OK) method2Ok = false;
+        if (nRet == MV_OK) {
+            std::cout << "TriggerSelector设置为FrameBurstStart成功" << std::endl;
+            nRet = MV_CC_SetEnumValueByString(handle, "TriggerMode", "On");
+            if (nRet == MV_OK) {
+                std::cout << "TriggerMode设置为On成功" << std::endl;
+                nRet = MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
+                if (nRet == MV_OK) {
+                    std::cout << "TriggerSource设置为Software成功" << std::endl;
+                    method2Ok = true;
+                } else {
+                    std::cout << "TriggerSource设置失败" << std::endl;
+                    method2Ok = false;
+                }
+            } else {
+                std::cout << "TriggerMode设置失败" << std::endl;
+                method2Ok = false;
+            }
+        } else {
+            std::cout << "TriggerSelector设置失败" << std::endl;
+            method2Ok = false;
+        }
     }
     
     std::cout << "方法2结果: " << (method2Ok ? "成功" : "失败") << std::endl;
@@ -719,12 +745,21 @@ static void testCameraSoftwareTriggerCompatibility(const std::string& cameraSeri
     
     if (method3Ok) {
         nRet = MV_CC_SetEnumValueByString(handle, "FrameTriggerSource", "Software");
-        if (nRet != MV_OK) method3Ok = false;
-    }
-    
-    if (method3Ok) {
-        nRet = MV_CC_SetEnumValueByString(handle, "AcquisitionMode", "Continuous");
-        if (nRet != MV_OK) method3Ok = false;
+        if (nRet == MV_OK) {
+            std::cout << "FrameTriggerSource设置为Software成功" << std::endl;
+            // 设置对应的触发模式
+            nRet = MV_CC_SetBoolValue(handle, "FrameTriggerMode", true);
+            if (nRet == MV_OK) {
+                std::cout << "FrameTriggerMode设置为true成功" << std::endl;
+                method3Ok = true;
+            } else {
+                std::cout << "FrameTriggerMode设置失败" << std::endl;
+                method3Ok = false;
+            }
+        } else {
+            std::cout << "FrameTriggerSource设置失败" << std::endl;
+            method3Ok = false;
+        }
     }
     
     std::cout << "方法3结果: " << (method3Ok ? "成功" : "失败") << std::endl;
@@ -750,34 +785,50 @@ static void testCameraSoftwareTrigger(const std::string& cameraSerial) {
     MV_CC_DEVICE_INFO_LIST deviceList{};
     int nRet = MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, &deviceList);
     if (nRet != MV_OK || deviceList.nDeviceNum == 0) {
+        std::cerr << "未发现可用相机，错误码: " << nRet << std::endl;
         assertTrue(false, "设备枚举失败，无法进行软触发测试");
         return;
     }
     
+    // 选择设备（优先匹配序列号；否则退回第一台）
     MV_CC_DEVICE_INFO* pSelectedDevice = nullptr;
     if (!cameraSerial.empty() && cameraSerial != "NULL") {
         for (unsigned int i = 0; i < deviceList.nDeviceNum; ++i) {
             MV_CC_DEVICE_INFO* pInfo = deviceList.pDeviceInfo[i];
             const char* serial = nullptr;
-            if (pInfo->nTLayerType == MV_USB_DEVICE) serial = (const char*)pInfo->SpecialInfo.stUsb3VInfo.chSerialNumber;
-            else if (pInfo->nTLayerType == MV_GIGE_DEVICE) serial = (const char*)pInfo->SpecialInfo.stGigEInfo.chSerialNumber;
-            if (serial && cameraSerial == serial) { pSelectedDevice = pInfo; break; }
+            if (pInfo->nTLayerType == MV_USB_DEVICE) {
+                serial = (const char*)pInfo->SpecialInfo.stUsb3VInfo.chSerialNumber;
+            } else if (pInfo->nTLayerType == MV_GIGE_DEVICE) {
+                serial = (const char*)pInfo->SpecialInfo.stGigEInfo.chSerialNumber;
+            }
+            if (serial && cameraSerial == serial) {
+                pSelectedDevice = pInfo;
+                break;
+            }
+        }
+        if (pSelectedDevice == nullptr) {
+            std::cerr << "未找到匹配序列号的相机，使用第一台。序列号: " << cameraSerial << std::endl;
         }
     }
-    if (!pSelectedDevice) pSelectedDevice = deviceList.pDeviceInfo[0];
+    if (pSelectedDevice == nullptr) {
+        pSelectedDevice = deviceList.pDeviceInfo[0];
+    }
     
     void* handle = nullptr;
     nRet = MV_CC_CreateHandle(&handle, pSelectedDevice);
-    if (nRet != MV_OK || !handle) { 
-        assertTrue(false, "创建相机句柄失败"); 
-        return; 
+    if (nRet != MV_OK || handle == nullptr) {
+        std::cerr << "创建相机句柄失败，错误码: " << nRet << std::endl;
+        assertTrue(false, "创建相机句柄失败");
+        return;
     }
     
+    // 2. 打开设备
     nRet = MV_CC_OpenDevice(handle);
-    if (nRet != MV_OK) { 
-        assertTrue(false, "打开相机失败"); 
-        MV_CC_DestroyHandle(handle); 
-        return; 
+    if (nRet != MV_OK) {
+        std::cerr << "打开设备失败: 0x" << std::hex << nRet << std::dec << std::endl;
+        MV_CC_DestroyHandle(handle);
+        assertTrue(false, "打开设备失败");
+        return;
     }
     
     std::cout << "相机连接成功，开始配置软触发参数..." << std::endl;
@@ -792,8 +843,9 @@ static void testCameraSoftwareTrigger(const std::string& cameraSerial) {
         configOk = false;
     }
     
-    // 2. 设置触发选择器
+    // 2. 设置触发选择器 - 这是关键步骤
     if (configOk) {
+        // 首先尝试FrameStart
         nRet = MV_CC_SetEnumValueByString(handle, "TriggerSelector", "FrameStart");
         if (nRet != MV_OK) {
             // 如果FrameStart失败，尝试使用数值6 (FrameBurstStart)
@@ -812,18 +864,18 @@ static void testCameraSoftwareTrigger(const std::string& cameraSerial) {
     
     // 3. 开启触发模式
     if (configOk) {
-        nRet = MV_CC_SetEnumValue(handle, "TriggerMode", 1);
+        nRet = MV_CC_SetEnumValueByString(handle, "TriggerMode", "On");
         if (nRet != MV_OK) {
             std::cerr << "开启触发模式失败: 0x" << std::hex << nRet << std::dec << std::endl;
             configOk = false;
         }
     }
     
-    // 4. 设置触发源
+    // 4. 设置触发源为软件触发
     if (configOk) {
         nRet = MV_CC_SetEnumValueByString(handle, "TriggerSource", "Software");
         if (nRet != MV_OK) {
-            std::cerr << "设置触发源失败: 0x" << std::hex << nRet << std::dec << std::endl;
+            std::cerr << "设置软件触发源失败: 0x" << std::hex << nRet << std::dec << std::endl;
             configOk = false;
         }
     }
@@ -848,80 +900,101 @@ static void testCameraSoftwareTrigger(const std::string& cameraSerial) {
     }
     
     if (!configOk) {
-        assertTrue(false, "软触发参数配置失败");
+        std::cerr << "软触发参数配置失败" << std::endl;
         MV_CC_CloseDevice(handle);
         MV_CC_DestroyHandle(handle);
+        assertTrue(false, "软触发参数配置失败");
         return;
     }
     
     std::cout << "软触发参数配置成功" << std::endl;
     
-    // 设置图像回调
+    // 7. 注册图像回调函数
     CallbackContext ctx;
-    ctx.totalFrames = 3; // 测试3张图像
-    ctx.saveDir = (std::filesystem::current_path() / "images").string();
-    try { std::filesystem::create_directories(ctx.saveDir); } catch (...) {}
+    ctx.totalFrames = 3;
+    ctx.saveDir = "images_Projector";
     
-    auto ImageCallbackEx = [](unsigned char* pData, MV_FRAME_OUT_INFO_EX* pFrameInfo, void* pUser) {
-        if (!pFrameInfo || !pUser) return;
-        CallbackContext* c = reinterpret_cast<CallbackContext*>(pUser);
-        const int idx = 1 + c->frameIndex.fetch_add(1);
-        std::cout << "软触发回调: 获取第" << idx << "帧图像 [" << pFrameInfo->nWidth << "x" << pFrameInfo->nHeight << "]" << std::endl;
-        if (idx <= c->totalFrames) {
-            cv::Mat img(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC1, pData);
-            cv::Mat imgCopy = img.clone();
-            std::string filename = "Trigger_" + std::to_string(idx) + ".png";
-            std::string path = (std::filesystem::path(c->saveDir) / filename).string();
-            try { 
-                cv::imwrite(path, imgCopy); 
-                std::cout << "软触发图像保存成功: " << path << std::endl;
-            } catch (...) { 
-                std::cerr << "软触发图像保存失败: " << path << std::endl; 
-            }
-        }
-    };
+    // 确保保存目录存在
+    try {
+        std::filesystem::create_directories(ctx.saveDir);
+    } catch (...) {
+        std::cout << "创建保存目录失败，使用当前目录" << std::endl;
+        ctx.saveDir = ".";
+    }
     
     nRet = MV_CC_RegisterImageCallBackEx(handle, ImageCallbackEx, &ctx);
     if (nRet != MV_OK) {
-        assertTrue(false, "注册图像回调失败");
+        std::cerr << "注册图像回调失败: 0x" << std::hex << nRet << std::dec << std::endl;
         MV_CC_CloseDevice(handle);
         MV_CC_DestroyHandle(handle);
+        assertTrue(false, "注册图像回调失败");
         return;
     }
     
-    // 开始取流
+    // 8. 开始取流
     nRet = MV_CC_StartGrabbing(handle);
     if (nRet != MV_OK) {
-        assertTrue(false, "开始取流失败");
+        std::cerr << "开始取流失败: 0x" << std::hex << nRet << std::dec << std::endl;
         MV_CC_CloseDevice(handle);
         MV_CC_DestroyHandle(handle);
+        assertTrue(false, "开始取流失败");
         return;
     }
     
     std::cout << "开始取流，执行软触发测试..." << std::endl;
     
-    // 执行软触发
+    // 9. 执行软触发
     for (int i = 0; i < 3; ++i) {
         std::cout << "执行第" << (i + 1) << "次软触发..." << std::endl;
-        // 使用正确的软触发命令：MV_CC_SetCommandValue
-        nRet = MV_CC_SetCommandValue(handle, "TriggerSoftware");
+        
+        // 根据TriggerSelector设置选择正确的软触发命令
+        std::string triggerCommand;
+        MVCC_ENUMVALUE triggerSelector;
+        nRet = MV_CC_GetEnumValue(handle, "TriggerSelector", &triggerSelector);
+        if (nRet == MV_OK) {
+            if (triggerSelector.nCurValue == 0) {  // FrameStart
+                triggerCommand = "FrameTriggerSoftware";
+            } else {
+                triggerCommand = "TriggerSoftware";  // 用于FrameBurstStart等
+            }
+        } else {
+            triggerCommand = "TriggerSoftware";  // 默认使用
+        }
+        
+        // 使用正确的软触发命令
+        nRet = MV_CC_SetCommandValue(handle, triggerCommand.c_str());
         if (nRet != MV_OK) {
             std::cerr << "软触发失败: 0x" << std::hex << nRet << std::dec << std::endl;
         } else {
             std::cout << "软触发成功" << std::endl;
         }
+        
         // 根据工业相机指导文档，如果帧率过小或TriggerDelay很大，可能会出现软触发命令没有全部起效的情况
-        std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 增加到500ms确保触发稳定
+        // 添加适当的延时确保触发命令生效
+        std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 延时500ms确保触发稳定
     }
     
-    // 等待回调处理完成
-    std::cout << "等待图像处理完成..." << std::endl;
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // 10. 等待回调处理完成
+    std::cout << "等待图像回调处理..." << std::endl;
+    std::this_thread::sleep_for(std::chrono::seconds(3));
     
-    // 停止取流
-    MV_CC_StopGrabbing(handle);
-    MV_CC_CloseDevice(handle);
-    MV_CC_DestroyHandle(handle);
+    // 11. 停止取流
+    nRet = MV_CC_StopGrabbing(handle);
+    if (nRet != MV_OK) {
+        std::cerr << "停止取流失败: 0x" << std::hex << nRet << std::dec << std::endl;
+    }
+    
+    // 12. 关闭设备
+    nRet = MV_CC_CloseDevice(handle);
+    if (nRet != MV_OK) {
+        std::cerr << "关闭设备失败: 0x" << std::hex << nRet << std::dec << std::endl;
+    }
+    
+    // 13. 销毁句柄
+    nRet = MV_CC_DestroyHandle(handle);
+    if (nRet != MV_OK) {
+        std::cerr << "销毁句柄失败: 0x" << std::hex << nRet << std::dec << std::endl;
+    }
     
     std::cout << "软触发测试完成，保存目录: " << ctx.saveDir << std::endl;
     assertTrue(true, "软触发功能测试完成");

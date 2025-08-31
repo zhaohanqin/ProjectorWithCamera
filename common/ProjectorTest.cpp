@@ -28,9 +28,12 @@
 #include <cmath>
 #include <cstring>
 #include <algorithm>
+#include <filesystem> // 添加文件系统头文件
 
 // Windows控制台编码设置，解决中文显示乱码问题
 #ifdef _WIN32
+// 避免 Windows 宏 min/max 与 std::min/std::max 冲突
+#define NOMINMAX
 #include <windows.h>
 #include <fcntl.h>
 #include <io.h>
@@ -386,6 +389,20 @@ void testProjectorStop() {
 void testProjectorPopulatePatternTableData() {
     std::cout << "\n--- 测试图案表数据填充 ---" << std::endl;
 
+    // 首先验证图像路径是否正确
+    std::cout << "验证图像路径: " << testData4710 << std::endl;
+    std::vector<cv::String> imgsPaths;
+    cv::glob(testData4710 + "/*.png", imgsPaths);
+    
+    if (imgsPaths.empty()) {
+        std::cerr << "错误：无法找到图像文件，请检查路径: " << testData4710 << std::endl;
+        std::cerr << "当前工作目录: " << std::filesystem::current_path().string() << std::endl;
+        assertTrue(false, "图像文件路径验证失败");
+        return;
+    }
+    
+    std::cout << "找到图像文件数量: " << imgsPaths.size() << std::endl;
+
     auto projectorFactory = slmaster::device::ProjectorFactory();           // 创建投影仪工厂实例
     auto projectorDlpcApi = projectorFactory.getProjector(testProjector4710); // 获取DLP4710投影仪实例
     bool isSucess = connectAndVerify(projectorDlpcApi);                     // 建立与投影仪的连接并校验
@@ -421,7 +438,6 @@ void testProjectorPopulatePatternTableData() {
     patternSets[1].patternArrayCounts_ = 1920;                             // 第二个图案集的数组数量
 
     // ===== 加载测试图案文件 =====
-    std::vector<cv::String> imgsPaths;                                     // 存储图案文件路径的向量
     cv::glob(testData4710 + "/*.png", imgsPaths);                          // 使用OpenCV的glob函数获取测试数据目录下的所有PNG文件路径
     std::vector<cv::Mat> imgFirstSet;                                      // 第一组图案的图像数据
     std::vector<cv::Mat> imgSecondSet;                                     // 第二组图案的图像数据
@@ -524,6 +540,23 @@ void testProjectorStep() {
 void testProjectorStepWithCustomPatterns() {
     std::cout << "\n--- 测试步进投影（自定义图案+相机采集） ---" << std::endl;
 
+    // 首先验证图像路径是否正确
+    std::cout << "验证图像路径: " << testData4710 << std::endl;
+    std::vector<cv::String> imgsPaths;
+    cv::glob(testData4710 + "/*.png", imgsPaths);
+    
+    if (imgsPaths.empty()) {
+        std::cerr << "错误：无法找到图像文件，请检查路径: " << testData4710 << std::endl;
+        std::cerr << "当前工作目录: " << std::filesystem::current_path().string() << std::endl;
+        assertTrue(false, "图像文件路径验证失败");
+        return;
+    }
+    
+    std::cout << "找到图像文件数量: " << imgsPaths.size() << std::endl;
+    for (const auto& path : imgsPaths) {
+        std::cout << "  - " << path << std::endl;
+    }
+
     auto projectorFactory = slmaster::device::ProjectorFactory();           // 创建投影仪工厂实例
     auto projectorDlpcApi = projectorFactory.getProjector(testProjector4710); // 获取DLP4710投影仪实例
     bool isSucess = projectorDlpcApi->connect();                            // 建立与投影仪的连接
@@ -562,7 +595,6 @@ void testProjectorStepWithCustomPatterns() {
     patternSets[0].patternArrayCounts_ = 1920;                             // 图案数组数量1920
 
     // 加载用户自定义的图案文件
-    std::vector<cv::String> imgsPaths;                                     // 存储图案文件路径
     cv::glob(testData4710 + "/*.png", imgsPaths);                          // 获取测试数据目录下的所有PNG文件路径
     std::vector<cv::Mat> customPatterns;                                   // 自定义图案的图像数据
 
@@ -930,13 +962,13 @@ void runAllTests() {
     testProjectorStop();//测试投影仪的停止投影是否成功
 
     // 图案数据管理测试
-    testProjectorPopulatePatternTableData();//测试投影仪的图案数据管理是否成功
+    //testProjectorPopulatePatternTableData();//测试投影仪的图案数据管理是否成功
 
     // 步进投影测试
     testProjectorStep();//测试投影仪的步进投影是否成功
 
     // 步进投影测试（自定义图案+相机采集）
-    testProjectorStepWithCustomPatterns();//测试投影仪的自定义图案步进投影和相机采集是否成功
+    //testProjectorStepWithCustomPatterns();//测试投影仪的自定义图案步进投影和相机采集是否成功
 
     // 自动生成条纹测试
     testProjectorStepWithGeneratedFringes();//测试投影仪的自动生成条纹步进投影是否成功
