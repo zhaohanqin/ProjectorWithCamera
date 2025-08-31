@@ -745,7 +745,10 @@ static std::vector<cv::Mat> generatePhaseShiftFringeImages(int width, int height
             if (lineGrayInt < 0) lineGrayInt = 0; if (lineGrayInt > 255) lineGrayInt = 255;
             const unsigned char v = static_cast<unsigned char>(lineGrayInt);
             unsigned char* row = img.ptr<unsigned char>(y);
-            std::memset(row, static_cast<int>(v), static_cast<size_t>(width));
+            // 修复：逐像素设置，而不是使用memset
+            for (int x = 0; x < width; ++x) {
+                row[x] = v;
+            }
         }
         result.push_back(img);
     }
@@ -816,6 +819,92 @@ void testProjectorStepWithGeneratedFringes() {
     std::cout << "垂直条纹图案数量: " << patternSets[0].imgs_.size() << std::endl;
     std::cout << "水平条纹图案数量: " << patternSets[1].imgs_.size() << std::endl;
 
+    // ===== 添加图像显示功能，用于诊断问题 =====
+    std::cout << "\n=== 图像诊断信息 ===" << std::endl;
+    
+    // 显示前4张图像（应该是垂直条纹）
+    std::cout << "前4张图像（垂直条纹）：" << std::endl;
+    for (size_t i = 0; i < std::min(static_cast<size_t>(4), imgs.size()); ++i) {
+        std::cout << "  图像 " << i << ": 尺寸=" << imgs[i].cols << "x" << imgs[i].rows 
+                  << ", 类型=" << imgs[i].type() << ", 通道数=" << imgs[i].channels() << std::endl;
+        
+        // 显示图像（使用OpenCV的imshow）
+        std::string windowName = "Vertical Fringe " + std::to_string(i);
+        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+        cv::resizeWindow(windowName, 800, 600); // 调整窗口大小便于查看
+        cv::imshow(windowName, imgs[i]);
+        
+        // 等待用户按键，让用户有时间查看每张图像
+        std::cout << "  按任意键查看下一张图像..." << std::endl;
+        cv::waitKey(0);
+        cv::destroyWindow(windowName);
+    }
+    
+    // 显示后4张图像（应该是水平条纹）
+    std::cout << "后4张图像（水平条纹）：" << std::endl;
+    for (size_t i = steps; i < imgs.size(); ++i) {
+        std::cout << "  图像 " << i << ": 尺寸=" << imgs[i].cols << "x" << imgs[i].rows 
+                  << ", 类型=" << imgs[i].type() << ", 通道数=" << imgs[i].channels() << std::endl;
+        
+        // 显示图像
+        std::string windowName = "Horizontal Fringe " + std::to_string(i);
+        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+        cv::resizeWindow(windowName, 800, 600);
+        cv::imshow(windowName, imgs[i]);
+        
+        std::cout << "  按任意键查看下一张图像..." << std::endl;
+        cv::waitKey(0);
+        cv::destroyWindow(windowName);
+    }
+    
+    // 显示图案集配置信息
+    std::cout << "\n=== 图案集配置信息 ===" << std::endl;
+    for (size_t i = 0; i < patternSets.size(); ++i) {
+        std::cout << "图案集 " << i << ":" << std::endl;
+        std::cout << "  isVertical_: " << (patternSets[i].isVertical_ ? "true" : "false") << std::endl;
+        std::cout << "  patternArrayCounts_: " << patternSets[i].patternArrayCounts_ << std::endl;
+        std::cout << "  exposureTime_: " << patternSets[i].exposureTime_ << std::endl;
+        std::cout << "  illumination_: " << static_cast<int>(patternSets[i].illumination_) << std::endl;
+        std::cout << "  图像数量: " << patternSets[i].imgs_.size() << std::endl;
+    }
+    
+    std::cout << "\n按任意键继续投影测试..." << std::endl;
+    cv::waitKey(0);
+    
+    // 保存生成的图像到磁盘，便于进一步分析
+    std::cout << "\n=== 保存图像到磁盘 ===" << std::endl;
+    std::string saveDir = "debug_fringe_images";
+    
+    // 创建保存目录
+    if (!std::filesystem::exists(saveDir)) {
+        std::filesystem::create_directory(saveDir);
+        std::cout << "创建目录: " << saveDir << std::endl;
+    }
+    
+    // 保存前4张垂直条纹图像
+    for (size_t i = 0; i < std::min(static_cast<size_t>(4), imgs.size()); ++i) {
+        std::string filename = saveDir + "/vertical_fringe_" + std::to_string(i) + ".png";
+        bool saveSuccess = cv::imwrite(filename, imgs[i]);
+        if (saveSuccess) {
+            std::cout << "保存垂直条纹图像 " << i << " 到: " << filename << std::endl;
+        } else {
+            std::cout << "保存垂直条纹图像 " << i << " 失败" << std::endl;
+        }
+    }
+    
+    // 保存后4张水平条纹图像
+    for (size_t i = steps; i < imgs.size(); ++i) {
+        std::string filename = saveDir + "/horizontal_fringe_" + std::to_string(i) + ".png";
+        bool saveSuccess = cv::imwrite(filename, imgs[i]);
+        if (saveSuccess) {
+            std::cout << "保存水平条纹图像 " << i << " 到: " << filename << std::endl;
+        } else {
+            std::cout << "保存水平条纹图像 " << i << " 失败" << std::endl;
+        }
+    }
+    
+    std::cout << "图像保存完成，目录: " << std::filesystem::absolute(saveDir).string() << std::endl;
+
     // 将图案数据加载到投影仪内部闪存
     std::cout << "开始加载图案数据到投影仪..." << std::endl;
     isSucess = projectorDlpcApi->populatePatternTableData(patternSets);
@@ -859,8 +948,45 @@ void testProjectorStepWithGeneratedFringes() {
     std::cout << "开始步进投影，总共 " << totalFrames << " 帧..." << std::endl;
     
     for (int i = 0; i < totalFrames; ++i) {
-        std::cout << "执行第 " << (i + 1) << " 次步进..." << std::endl;
+        std::cout << "\n=== 执行第 " << (i + 1) << " 次步进 ===" << std::endl;
         
+        // 显示当前图案的详细信息
+        const bool isVertical = (i < steps);
+        const int patternSetIndex = isVertical ? 0 : 1;
+        const int patternIndex = isVertical ? i : (i - steps);
+        
+        std::cout << "当前图案信息:" << std::endl;
+        std::cout << "  图案集索引: " << patternSetIndex << " (" << (isVertical ? "垂直" : "水平") << "条纹)" << std::endl;
+        std::cout << "  图案集内索引: " << patternIndex << std::endl;
+        std::cout << "  图案集配置:" << std::endl;
+        std::cout << "    isVertical_: " << (patternSets[patternSetIndex].isVertical_ ? "true" : "false") << std::endl;
+        std::cout << "    patternArrayCounts_: " << patternSets[patternSetIndex].patternArrayCounts_ << std::endl;
+        std::cout << "    exposureTime_: " << patternSets[patternSetIndex].exposureTime_ << std::endl;
+        
+        // 显示当前图案的图像信息
+        if (patternIndex < static_cast<int>(patternSets[patternSetIndex].imgs_.size())) {
+            const cv::Mat& currentImg = patternSets[patternSetIndex].imgs_[patternIndex];
+            std::cout << "  当前图案图像:" << std::endl;
+            std::cout << "    尺寸: " << currentImg.cols << "x" << currentImg.rows << std::endl;
+            std::cout << "    类型: " << currentImg.type() << std::endl;
+            std::cout << "    通道数: " << currentImg.channels() << std::endl;
+            
+            // 计算并显示图像的统计信息
+            double minVal, maxVal, meanVal, stdDevVal;
+            cv::minMaxLoc(currentImg, &minVal, &maxVal);
+            
+            // 正确使用cv::meanStdDev函数
+            cv::Mat meanMat, stdDevMat;
+            cv::meanStdDev(currentImg, meanMat, stdDevMat);
+            meanVal = meanMat.at<double>(0, 0);
+            stdDevVal = stdDevMat.at<double>(0, 0);
+            
+            std::cout << "    像素值范围: [" << minVal << ", " << maxVal << "]" << std::endl;
+            std::cout << "    平均像素值: " << meanVal << std::endl;
+            std::cout << "    标准差: " << stdDevVal << std::endl;
+        }
+        
+        std::cout << "执行步进操作..." << std::endl;
         isSucess = projectorDlpcApi->step();
         assertTrue(isSucess, "步进第" + std::to_string(i + 1) + "步");
         
@@ -871,7 +997,6 @@ void testProjectorStepWithGeneratedFringes() {
         
         // 等待投影仪完成当前图案的显示
         // 根据图案的曝光时间计算等待时间
-        const bool isVertical = (i < steps);
         const int exposureTime = isVertical ? patternSets[0].exposureTime_ : patternSets[1].exposureTime_;
         const int preTime = isVertical ? patternSets[0].preExposureTime_ : patternSets[1].preExposureTime_;
         const int postTime = isVertical ? patternSets[0].postExposureTime_ : patternSets[1].postExposureTime_;
@@ -897,6 +1022,97 @@ void testProjectorStepWithGeneratedFringes() {
     assertTrue(isSucess, "断开连接操作成功");
     
     std::cout << "自动生成条纹测试完成" << std::endl;
+}
+
+// ==================== 图像生成验证测试 ====================
+
+/**
+ * @brief 验证图像生成函数是否正确生成垂直和水平条纹
+ * @details 这个函数用于独立测试图像生成逻辑，不涉及投影仪操作
+ */
+void testImageGeneration() {
+    std::cout << "\n--- 测试图像生成函数 ---" << std::endl;
+    
+    const int width = 640;   // 使用较小的分辨率进行测试
+    const int height = 480;
+    const int steps = 4;
+    const int frequency = 8;  // 使用较小的频率便于观察
+    const int intensity = 100;
+    const int offset = 128;
+    const double noise = 0.0;
+    
+    std::cout << "生成测试图像: " << width << "x" << height << ", 频率=" << frequency << std::endl;
+    
+    auto imgs = generatePhaseShiftFringeImages(width, height, frequency, intensity, offset, noise, steps);
+    
+    if (imgs.size() != steps * 2) {
+        std::cout << "错误：生成的图像数量不正确，期望 " << (steps * 2) << "，实际 " << imgs.size() << std::endl;
+        return;
+    }
+    
+    std::cout << "成功生成 " << imgs.size() << " 张图像" << std::endl;
+    
+    // 显示前4张（垂直条纹）
+    std::cout << "\n显示垂直条纹图像（前4张）：" << std::endl;
+    for (size_t i = 0; i < steps; ++i) {
+        std::string windowName = "Test Vertical " + std::to_string(i);
+        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+        cv::resizeWindow(windowName, 400, 300);
+        cv::imshow(windowName, imgs[i]);
+        
+        // 计算并显示图像特征
+        double minVal, maxVal, meanVal;
+        cv::minMaxLoc(imgs[i], &minVal, &maxVal);
+        
+        // 正确使用cv::meanStdDev函数
+        cv::Mat meanMat, stdDevMat;
+        cv::meanStdDev(imgs[i], meanMat, stdDevMat);
+        meanVal = meanMat.at<double>(0, 0);
+        
+        std::cout << "  垂直条纹 " << i << ": 尺寸=" << imgs[i].cols << "x" << imgs[i].rows 
+                  << ", 像素范围=[" << minVal << "," << maxVal << "], 平均值=" << meanVal << std::endl;
+        
+        cv::waitKey(1000); // 显示1秒
+        cv::destroyWindow(windowName);
+    }
+    
+    // 显示后4张（水平条纹）
+    std::cout << "\n显示水平条纹图像（后4张）：" << std::endl;
+    for (size_t i = steps; i < imgs.size(); ++i) {
+        std::string windowName = "Test Horizontal " + std::to_string(i);
+        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
+        cv::resizeWindow(windowName, 400, 300);
+        cv::imshow(windowName, imgs[i]);
+        
+        // 计算并显示图像特征
+        double minVal, maxVal, meanVal;
+        cv::minMaxLoc(imgs[i], &minVal, &maxVal);
+        
+        // 正确使用cv::meanStdDev函数
+        cv::Mat meanMat, stdDevMat;
+        cv::meanStdDev(imgs[i], meanMat, stdDevMat);
+        meanVal = meanMat.at<double>(0, 0);
+        
+        std::cout << "  水平条纹 " << i << ": 尺寸=" << imgs[i].cols << "x" << imgs[i].rows 
+                  << ", 像素范围=[" << minVal << "," << maxVal << "], 平均值=" << meanVal << std::endl;
+        
+        cv::waitKey(1000); // 显示1秒
+        cv::destroyWindow(windowName);
+    }
+    
+    // 保存测试图像
+    std::string testDir = "test_generated_images";
+    if (!std::filesystem::exists(testDir)) {
+        std::filesystem::create_directory(testDir);
+    }
+    
+    for (size_t i = 0; i < imgs.size(); ++i) {
+        std::string filename = testDir + "/test_fringe_" + std::to_string(i) + ".png";
+        cv::imwrite(filename, imgs[i]);
+        std::cout << "保存测试图像 " << i << " 到: " << filename << std::endl;
+    }
+    
+    std::cout << "图像生成测试完成" << std::endl;
 }
 
 // ==================== LED控制功能测试 ====================
@@ -945,6 +1161,7 @@ void testProjectorGetSetLEDCurrent() {
 void runAllTests() {
     std::cout << getLocalizedString("开始运行投影仪功能测试...", "Starting projector functionality tests...") << std::endl;
 
+    
     // 基础功能测试
     testProjectorInit();//测试投影仪的初始化是否成功
     testProjectorGetInfo();//测试投影仪的获取信息是否成功
@@ -970,14 +1187,22 @@ void runAllTests() {
     // 步进投影测试（自定义图案+相机采集）
     //testProjectorStepWithCustomPatterns();//测试投影仪的自定义图案步进投影和相机采集是否成功
 
+    // 图像生成验证测试（独立测试，不涉及投影仪）
+    testImageGeneration();//测试图像生成函数是否正确生成垂直和水平条纹
+
+    
+    
     // 自动生成条纹测试
     testProjectorStepWithGeneratedFringes();//测试投影仪的自动生成条纹步进投影是否成功
 
+    
     // LED控制测试
     testProjectorGetSetLEDCurrent();//测试投影仪的LED电流获取和设置是否成功
 
     // 打印测试结果
     testResults.printSummary();//打印测试结果
+
+    
 }
 
 // ==================== 主函数 ====================
