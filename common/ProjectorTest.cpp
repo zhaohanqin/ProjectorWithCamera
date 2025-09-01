@@ -758,9 +758,29 @@ static std::vector<cv::Mat> generatePhaseShiftFringeImages(int width, int height
 
 /**
  * @brief 使用自动生成的四步相移条纹图像进行步进投影测试（不依赖磁盘文件）
- * 生成顺序：先4张垂直，再4张水平；
- * - patternSets[0] 配置垂直条纹参数与图像
- * - patternSets[1] 配置水平条纹参数与图像
+ * 
+ * ===== 重要改进：单通道配置方案 =====
+ * 本函数实现了从双通道配置到单通道配置的重要改进：
+ * 
+ * 【问题背景】：
+ * - DLP4710是双通道投影仪，原先将垂直和水平条纹分别配置到两个PatternOrderSet中
+ * - 这导致投影仪将它们作为两个独立通道处理，可能只显示其中一种条纹方向
+ * - 结构光投影需要同时获取水平和垂直方向的条纹才能进行3D重建
+ * 
+ * 【解决方案】：
+ * - 改为单通道配置：创建1个PatternOrderSet而不是2个
+ * - 将所有2N张条纹图像（N张垂直+N张水平）按顺序放入同一个图案集
+ * - 投影仪按顺序投影所有图像：先投影垂直条纹，再投影水平条纹
+ * 
+ * 【技术细节】：
+ * - 生成顺序：先4张垂直条纹，再4张水平条纹（总共8张）
+ * - 单一PatternOrderSet配置：包含所有8张图像，按索引0-7顺序投影
+ * - 步进投影：每次step()调用投影下一张图像，确保垂直和水平条纹都能正确显示
+ * 
+ * 【优势】：
+ * - 避免双通道分离问题，确保所有方向的条纹都能投影
+ * - 简化配置逻辑，减少通道管理复杂性
+ * - 提高结构光投影的可靠性和一致性
  */
 void testProjectorStepWithGeneratedFringes() {
     std::cout << "\n--- 测试步进投影（自动生成四步相移条纹） ---" << std::endl;
@@ -792,32 +812,34 @@ void testProjectorStepWithGeneratedFringes() {
 
     std::cout << "成功生成 " << imgs.size() << " 张条纹图像" << std::endl;
 
-    std::vector<slmaster::device::PatternOrderSet> patternSets(2);
+    // ===== 单通道配置方案 =====
+    // 将所有2N张条纹图像配置到一个通道中，实现顺序投影
+    // 这样可以避免双通道投影仪的通道分离问题，确保水平和垂直条纹都能正确投影
+    std::vector<slmaster::device::PatternOrderSet> patternSets(1);
 
-    // 垂直条纹配置（前N张）
+    // 配置单一图案集，包含所有垂直和水平条纹
     patternSets[0].exposureTime_ = 4000;
     patternSets[0].preExposureTime_ = 3000;
     patternSets[0].postExposureTime_ = 3000;
     patternSets[0].illumination_ = slmaster::device::Blue;
     patternSets[0].invertPatterns_ = false;
-    patternSets[0].isVertical_ = true;      // 垂直
+    
+    // 关键改进：设置为混合模式，因为包含了垂直和水平两种方向的条纹
+    // 对于包含多种方向条纹的情况，通常设置为垂直方向作为主方向
+    patternSets[0].isVertical_ = true;      // 设置为垂直方向作为主方向
     patternSets[0].isOneBit_ = false;       // 灰度正弦
-    patternSets[0].patternArrayCounts_ = deviceWidth; // 对垂直条纹通常与宽度相关
-    patternSets[0].imgs_.assign(imgs.begin(), imgs.begin() + steps);
+    
+    // 图案数组计数设置为设备宽度，这是DLP投影仪的标准配置
+    patternSets[0].patternArrayCounts_ = deviceWidth;
+    
+    // 将所有图像按顺序添加到单一图案集：先垂直条纹（前N张），再水平条纹（后N张）
+    patternSets[0].imgs_ = imgs; // 直接使用生成的所有图像
 
-    // 水平条纹配置（后N张）
-    patternSets[1].exposureTime_ = 4000;
-    patternSets[1].preExposureTime_ = 3000;
-    patternSets[1].postExposureTime_ = 3000;
-    patternSets[1].illumination_ = slmaster::device::Blue;
-    patternSets[1].invertPatterns_ = false;
-    patternSets[1].isVertical_ = false;     // 水平
-    patternSets[1].isOneBit_ = false;       // 灰度正弦
-    patternSets[1].patternArrayCounts_ = deviceHeight; // 水平条纹通常与高度相关
-    patternSets[1].imgs_.assign(imgs.begin() + steps, imgs.end());
-
-    std::cout << "垂直条纹图案数量: " << patternSets[0].imgs_.size() << std::endl;
-    std::cout << "水平条纹图案数量: " << patternSets[1].imgs_.size() << std::endl;
+    std::cout << "单通道图案集配置完成:" << std::endl;
+    std::cout << "  总图案数量: " << patternSets[0].imgs_.size() << std::endl;
+    std::cout << "  垂直条纹数量: " << steps << " 张（图案索引 0-" << (steps-1) << "）" << std::endl;
+    std::cout << "  水平条纹数量: " << steps << " 张（图案索引 " << steps << "-" << (steps*2-1) << "）" << std::endl;
+    std::cout << "  投影方向设置: " << (patternSets[0].isVertical_ ? "垂直主导" : "水平主导") << std::endl;
 
     // ===== 添加图像显示功能，用于诊断问题 =====
     std::cout << "\n=== 图像诊断信息 ===" << std::endl;
@@ -866,6 +888,7 @@ void testProjectorStepWithGeneratedFringes() {
         std::cout << "  exposureTime_: " << patternSets[i].exposureTime_ << std::endl;
         std::cout << "  illumination_: " << static_cast<int>(patternSets[i].illumination_) << std::endl;
         std::cout << "  图像数量: " << patternSets[i].imgs_.size() << std::endl;
+        std::cout << "  包含条纹类型: 垂直条纹(" << steps << "张) + 水平条纹(" << steps << "张)" << std::endl;
     }
     
     std::cout << "\n按任意键继续投影测试..." << std::endl;
@@ -950,14 +973,17 @@ void testProjectorStepWithGeneratedFringes() {
     for (int i = 0; i < totalFrames; ++i) {
         std::cout << "\n=== 执行第 " << (i + 1) << " 次步进 ===" << std::endl;
         
-        // 显示当前图案的详细信息
+        // ===== 单通道配置下的图案信息显示 =====
+        // 所有图案都在同一个图案集（索引0）中，按顺序排列：前N张为垂直条纹，后N张为水平条纹
         const bool isVertical = (i < steps);
-        const int patternSetIndex = isVertical ? 0 : 1;
-        const int patternIndex = isVertical ? i : (i - steps);
+        const int patternSetIndex = 0; // 单通道配置，只有一个图案集
+        const int patternIndex = i; // 图案在图案集中的索引，即为步进次数
         
         std::cout << "当前图案信息:" << std::endl;
-        std::cout << "  图案集索引: " << patternSetIndex << " (" << (isVertical ? "垂直" : "水平") << "条纹)" << std::endl;
-        std::cout << "  图案集内索引: " << patternIndex << std::endl;
+        std::cout << "  图案集索引: " << patternSetIndex << " (单通道配置)" << std::endl;
+        std::cout << "  图案在集合中的索引: " << patternIndex << std::endl;
+        std::cout << "  图案类型: " << (isVertical ? "垂直条纹" : "水平条纹") << std::endl;
+        std::cout << "  相移步进: " << (isVertical ? (i % steps) : ((i - steps) % steps)) + 1 << "/" << steps << std::endl;
         std::cout << "  图案集配置:" << std::endl;
         std::cout << "    isVertical_: " << (patternSets[patternSetIndex].isVertical_ ? "true" : "false") << std::endl;
         std::cout << "    patternArrayCounts_: " << patternSets[patternSetIndex].patternArrayCounts_ << std::endl;
@@ -995,11 +1021,11 @@ void testProjectorStepWithGeneratedFringes() {
             break;
         }
         
-        // 等待投影仪完成当前图案的显示
-        // 根据图案的曝光时间计算等待时间
-        const int exposureTime = isVertical ? patternSets[0].exposureTime_ : patternSets[1].exposureTime_;
-        const int preTime = isVertical ? patternSets[0].preExposureTime_ : patternSets[1].preExposureTime_;
-        const int postTime = isVertical ? patternSets[0].postExposureTime_ : patternSets[1].postExposureTime_;
+        // ===== 单通道配置下的等待时间计算 =====
+        // 由于所有图案都在同一个图案集中，使用统一的时序参数
+        const int exposureTime = patternSets[0].exposureTime_;
+        const int preTime = patternSets[0].preExposureTime_;
+        const int postTime = patternSets[0].postExposureTime_;
         const int totalTimeMs = (preTime + exposureTime + postTime) / 1000;
         
         // 增加等待时间，确保投影稳定
@@ -1228,5 +1254,3 @@ int main() {
         return 1;
     }
 }
-
-

@@ -1,10 +1,11 @@
-// 投影仪与相机协作演示（相机部分以注释形式保留接口）
+// 投影仪与相机协作演示（完整实现版本）
 //
 // 设计目标：
-// - 提供一个可直接复用的“步进投影 + 软触发采集”的协作流程样例；
-// - 相机与投影仪均采用“软触发”：由软件下发指令来推进投影以及触发相机采集；
-// - 生成 N 步相移条纹，顺序：垂直 N 张 + 水平 N 张，总计 2N 张；
-// - 每投影一张（step一次），便触发一次相机采集（以注释形式保留）；
+// - 提供一个可直接复用的"步进投影 + 软触发采集"的协作流程样例；
+// - 相机与投影仪均采用"软触发"：由软件下发指令来推进投影以及触发相机采集；
+// - 自动生成 N 步相移条纹，顺序：垂直 N 张 + 水平 N 张，总计 2N 张；
+// - 每投影一张（step一次），便触发一次相机采集并保存图像；
+// - 支持从CameraTest.cpp保存的参数文件读取相机配置；
 // - 默认投影仪型号为 "DLP4710"（如需其他型号，可在函数参数中修改）。
 
 #include "projectorFactory.h"
@@ -34,8 +35,187 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/highgui.hpp>
 #include <filesystem>
+#include <fstream>
+#include <sstream>
 
 namespace slmaster_demo {
+
+// ========== 相机参数配置结构体（与CameraTest.cpp保持一致） ==========
+struct CameraParams {
+    // 曝光参数
+    float exposureTimeUs = -1.0f;        // 曝光时间（微秒），-1表示使用默认值
+    bool exposureAutoMode = false;       // 是否启用自动曝光
+    
+    // 增益参数
+    float gainValue = -1.0f;             // 增益值，-1表示使用默认值
+    bool gainAutoMode = false;           // 是否启用自动增益
+    
+    // 帧率参数
+    float frameRate = -1.0f;             // 帧率（fps），-1表示使用默认值
+    
+    // 触发参数
+    int triggerDelayUs = 0;              // 触发延时（微秒）
+    
+    // 其他参数
+    bool enableChunkData = false;        // 是否启用块数据
+    bool printCurrentParams = true;      // 是否打印当前参数
+    
+    // 参数范围信息（用于验证）
+    struct {
+        float exposureMin = 0.0f, exposureMax = 0.0f;
+        float gainMin = 0.0f, gainMax = 0.0f;
+        float frameRateMin = 0.0f, frameRateMax = 0.0f;
+    } ranges;
+};
+
+// 参数文件管理（与CameraTest.cpp保持一致）
+const std::string PARAMS_FILE = "camera_params.txt";
+
+// 从文件读取相机参数（与CameraTest.cpp保持一致）
+static bool loadCameraParams(CameraParams& params, const std::string& filename = PARAMS_FILE) {
+    try {
+        std::ifstream file(filename);
+        if (!file.is_open()) {
+            std::cout << "参数文件不存在: " << filename << "，将使用默认参数" << std::endl;
+            return false;
+        }
+        
+        std::string line;
+        while (std::getline(file, line)) {
+            // 跳过空行和注释行
+            if (line.empty() || line[0] == '#') {
+                continue;
+            }
+            
+            // 解析键值对
+            size_t pos = line.find('=');
+            if (pos == std::string::npos) {
+                continue;
+            }
+            
+            std::string key = line.substr(0, pos);
+            std::string value = line.substr(pos + 1);
+            
+            // 去除前后空格
+            key.erase(0, key.find_first_not_of(" \t"));
+            key.erase(key.find_last_not_of(" \t") + 1);
+            value.erase(0, value.find_first_not_of(" \t"));
+            value.erase(value.find_last_not_of(" \t") + 1);
+            
+            // 设置参数值
+            if (key == "exposureTimeUs") {
+                params.exposureTimeUs = std::stof(value);
+            } else if (key == "exposureAutoMode") {
+                params.exposureAutoMode = (value == "1");
+            } else if (key == "gainValue") {
+                params.gainValue = std::stof(value);
+            } else if (key == "gainAutoMode") {
+                params.gainAutoMode = (value == "1");
+            } else if (key == "frameRate") {
+                params.frameRate = std::stof(value);
+            } else if (key == "triggerDelayUs") {
+                params.triggerDelayUs = std::stoi(value);
+            } else if (key == "enableChunkData") {
+                params.enableChunkData = (value == "1");
+            } else if (key == "printCurrentParams") {
+                params.printCurrentParams = (value == "1");
+            }
+        }
+        
+        file.close();
+        std::cout << "参数已从文件加载: " << filename << std::endl;
+        return true;
+    } catch (const std::exception& e) {
+        std::cerr << "读取参数文件失败: " << e.what() << std::endl;
+        return false;
+    }
+}
+
+// 配置相机参数（与CameraTest.cpp保持一致）
+static bool configureCameraParams(void* handle, const CameraParams& params) {
+    std::cout << "\n=== 配置相机参数 ===" << std::endl;
+    
+    // 1. 配置曝光参数
+    if (params.exposureTimeUs > 0) {
+        std::cout << "设置曝光时间: " << params.exposureTimeUs << " μs" << std::endl;
+        int nRet = MV_CC_SetFloatValue(handle, "ExposureTime", params.exposureTimeUs);
+        if (nRet != MV_OK) {
+            std::cerr << "设置曝光时间失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+            return false;
+        }
+        std::cout << "曝光时间设置成功" << std::endl;
+    }
+    
+    // 2. 配置自动曝光模式
+    if (params.exposureAutoMode) {
+        std::cout << "启用自动曝光模式" << std::endl;
+        int nRet = MV_CC_SetEnumValue(handle, "ExposureAuto", 2); // 2 = 连续自动曝光
+        if (nRet != MV_OK) {
+            std::cout << "启用自动曝光失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+        } else {
+            std::cout << "自动曝光模式启用成功" << std::endl;
+        }
+    } else {
+        // 关闭自动曝光
+        int nRet = MV_CC_SetEnumValue(handle, "ExposureAuto", 0); // 0 = 关闭自动曝光
+        if (nRet == MV_OK) {
+            std::cout << "自动曝光模式已关闭" << std::endl;
+        }
+    }
+    
+    // 3. 配置增益参数
+    if (params.gainValue > 0) {
+        std::cout << "设置增益: " << params.gainValue << std::endl;
+        int nRet = MV_CC_SetFloatValue(handle, "Gain", params.gainValue);
+        if (nRet != MV_OK) {
+            std::cerr << "设置增益失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+            return false;
+        }
+        std::cout << "增益设置成功" << std::endl;
+    }
+    
+    // 4. 配置自动增益模式
+    if (params.gainAutoMode) {
+        std::cout << "启用自动增益模式" << std::endl;
+        int nRet = MV_CC_SetEnumValue(handle, "GainAuto", 2); // 2 = 连续自动增益
+        if (nRet != MV_OK) {
+            std::cout << "启用自动增益失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+        } else {
+            std::cout << "自动增益模式启用成功" << std::endl;
+        }
+    } else {
+        // 关闭自动增益
+        int nRet = MV_CC_SetEnumValue(handle, "GainAuto", 0); // 0 = 关闭自动增益
+        if (nRet == MV_OK) {
+            std::cout << "自动增益模式已关闭" << std::endl;
+        }
+    }
+    
+    // 5. 配置帧率
+    if (params.frameRate > 0) {
+        std::cout << "设置帧率: " << params.frameRate << " fps" << std::endl;
+        int nRet = MV_CC_SetFloatValue(handle, "AcquisitionFrameRate", params.frameRate);
+        if (nRet != MV_OK) {
+            std::cout << "设置帧率失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+        } else {
+            std::cout << "帧率设置成功" << std::endl;
+        }
+    }
+    
+    // 6. 配置触发延时
+    if (params.triggerDelayUs > 0) {
+        std::cout << "设置触发延时: " << params.triggerDelayUs << " μs" << std::endl;
+        int nRet = MV_CC_SetFloatValue(handle, "TriggerDelay", params.triggerDelayUs);
+        if (nRet != MV_OK) {
+            std::cout << "设置触发延时失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+        } else {
+            std::cout << "触发延时设置成功" << std::endl;
+        }
+    }
+    
+    std::cout << "相机参数配置完成" << std::endl;
+    return true;
+}
 
 // 生成N步相移条纹（先垂直N张，再水平N张），与 generate_fringe_patterns.py 参数一致
 //
@@ -122,15 +302,16 @@ static std::vector<cv::Mat> generatePhaseShiftFringeImages(
     return result;
 }
 
-// 演示：投影仪与相机协作（均为“软触发”）
+// 演示：投影仪与相机协作（均为"软触发"）
 // 流程：
 // 1) 初始化并选择投影仪；
-// 2) 生成 2N 张相移条纹（垂直 N + 水平 N），装载到投影仪；
-// 3) 开始投影；循环 2N 次：
+// 2) 自动生成 2N 张相移条纹（垂直 N + 水平 N），装载到投影仪；
+// 3) 初始化相机并读取保存的参数配置；
+// 4) 开始投影；循环 2N 次：
 //    - 先软件步进 projector->step() 使投影仪显示下一张图；
 //    - 等待稳定时间；
-//    - 再以软件触发相机采集一帧（此处保留注释接口）；
-// 4) 全部完成后停止投影并断开连接。
+//    - 再以软件触发相机采集一帧并保存图像；
+// 5) 全部完成后停止投影并断开连接。
 // 参数说明：
 // - projectorModel：投影仪型号字符串，默认 "DLP4710"；
 // - deviceWidth   ：投影分辨率宽度（需与设备一致，如 1920）；
@@ -139,7 +320,10 @@ static std::vector<cv::Mat> generatePhaseShiftFringeImages(
 // - frequency     ：条纹频率/周期数；
 // - intensity     ：条纹强度/振幅（建议不超过 127）；
 // - offset        ：亮度偏移（建议位于 128 附近以居中）；
-// - noiseStd      ：噪声标准差（0 表示不加噪声）。
+// - noiseStd      ：噪声标准差（0 表示不加噪声）；
+// - cameraSerial  ：相机序列号，"NULL"表示自动选择第一台；
+// - outputDir     ：图像保存目录，为空表示当前目录；
+// - useSavedParams：是否使用保存的相机参数，true表示从文件读取。
 // 返回值：
 // - true 表示流程执行成功；false 表示中途失败。
 bool runProjectorCameraCooperation(
@@ -153,10 +337,7 @@ bool runProjectorCameraCooperation(
     double noiseStd,
     const std::string& cameraSerial /* = "NULL" 表示自动选择第一台 */,
     const std::string& outputDir /* 为空表示当前目录 */,
-    double exposureTimeUs /* 曝光时间(微秒) */,
-    double gainValue /* 增益 */,
-    double acquisitionFps /* 采集帧率 */,
-    double triggerDelayUs /* 触发延时(微秒) */
+    bool useSavedParams /* = true 表示使用保存的相机参数 */
 ) {
     using namespace slmaster::device;
 
@@ -229,70 +410,44 @@ bool runProjectorCameraCooperation(
         MV_CC_SetEnumValueByString(cameraHandle, "TriggerSource", "Software");
         MV_CC_SetEnumValueByString(cameraHandle, "AcquisitionMode", "Continuous");
 
-        // ========== 相机参数：曝光/增益/帧率/触发延时 ==========
-        // 说明（对协作采集的影响）：
-        // - ExposureTime(us)：决定单帧积分时间；
-        //   * 增大：图像更亮，但投影步进周期需更长，运动模糊风险增加；
-        //   * 减小：图像更暗，但可更快步进与触发；
-        //   在结构光中，应确保曝光窗口覆盖“投影稳定区间”。
-        // - Gain：提升亮度但同时放大噪声；尽量用曝光满足亮度，增益只作补偿。
-        // - AcquisitionFrameRate：指导相机采集速率；
-        //   在软触发下通常作为上限，需要与“曝光+读出+传输”匹配，避免阻塞/丢帧。
-        // - TriggerDelay(us)：触发到曝光开始的延时；
-        //   常用于对齐 projector->step() 之后的稳定时间，避免采到过渡帧。
-        // 参数策略：仅当用户提供非负值时才关闭对应自动模式并设置；否则保持自动。
-        // 仅当用户指定参数时才关闭自动曝光/增益并手动设置
-        if (exposureTimeUs >= 0.0) {
-            MV_CC_SetEnumValue(cameraHandle, "ExposureAuto", 0);
-        }
-        if (gainValue >= 0.0) {
-            MV_CC_SetEnumValue(cameraHandle, "GainAuto", 0);
+        // ========== 相机参数配置：从保存的文件读取或使用默认值 ==========
+        CameraParams cameraParams;
+        if (useSavedParams) {
+            std::cout << "尝试从保存的参数文件读取相机配置..." << std::endl;
+            if (loadCameraParams(cameraParams)) {
+                std::cout << "成功加载保存的相机参数" << std::endl;
+            } else {
+                std::cout << "未找到保存的参数文件，使用默认参数" << std::endl;
+                // 设置默认参数
+                cameraParams.exposureTimeUs = 10000.0f; // 10ms
+                cameraParams.gainValue = 5.0f; // 5dB
+                cameraParams.frameRate = 10.0f; // 10fps
+                cameraParams.exposureAutoMode = false;
+                cameraParams.gainAutoMode = false;
+                cameraParams.triggerDelayUs = 0;
+                cameraParams.enableChunkData = false;
+                cameraParams.printCurrentParams = true;
+            }
+        } else {
+            std::cout << "使用默认相机参数" << std::endl;
+            // 设置默认参数
+            cameraParams.exposureTimeUs = 10000.0f; // 10ms
+            cameraParams.gainValue = 5.0f; // 5dB
+            cameraParams.frameRate = 10.0f; // 10fps
+            cameraParams.exposureAutoMode = false;
+            cameraParams.gainAutoMode = false;
+            cameraParams.triggerDelayUs = 0;
+            cameraParams.enableChunkData = false;
+            cameraParams.printCurrentParams = true;
         }
 
-        // 曝光时间
-        if (exposureTimeUs > 0.0) {
-            MVCC_FLOATVALUE expRange{};
-            if (MV_CC_GetFloatValue(cameraHandle, "ExposureTime", &expRange) == MV_OK) {
-                double v = exposureTimeUs;
-                if (v < expRange.fMin) v = expRange.fMin;
-                if (v > expRange.fMax) v = expRange.fMax;
-                MV_CC_SetFloatValue(cameraHandle, "ExposureTime", v);
-                std::cout << "ExposureTime(us): " << v << " [" << expRange.fMin << ", " << expRange.fMax << "]" << std::endl;
-            }
-        }
-        // 增益
-        if (gainValue > 0.0) {
-            MVCC_FLOATVALUE gRange{};
-            if (MV_CC_GetFloatValue(cameraHandle, "Gain", &gRange) == MV_OK) {
-                double v = gainValue;
-                if (v < gRange.fMin) v = gRange.fMin;
-                if (v > gRange.fMax) v = gRange.fMax;
-                MV_CC_SetFloatValue(cameraHandle, "Gain", v);
-                std::cout << "Gain: " << v << " [" << gRange.fMin << ", " << gRange.fMax << "]" << std::endl;
-            }
-        }
-        // 帧率
-        if (acquisitionFps > 0.0) {
-            MV_CC_SetBoolValue(cameraHandle, "AcquisitionFrameRateEnable", true);
-            MVCC_FLOATVALUE fRange{};
-            if (MV_CC_GetFloatValue(cameraHandle, "AcquisitionFrameRate", &fRange) == MV_OK) {
-                double v = acquisitionFps;
-                if (v < fRange.fMin) v = fRange.fMin;
-                if (v > fRange.fMax) v = fRange.fMax;
-                MV_CC_SetFloatValue(cameraHandle, "AcquisitionFrameRate", v);
-                std::cout << "AcquisitionFrameRate: " << v << " [" << fRange.fMin << ", " << fRange.fMax << "]" << std::endl;
-            }
-        }
-        // 触发延时
-        if (triggerDelayUs >= 0.0) {
-            MVCC_FLOATVALUE dRange{};
-            if (MV_CC_GetFloatValue(cameraHandle, "TriggerDelay", &dRange) == MV_OK) {
-                double v = triggerDelayUs;
-                if (v < dRange.fMin) v = dRange.fMin;
-                if (v > dRange.fMax) v = dRange.fMax;
-                MV_CC_SetFloatValue(cameraHandle, "TriggerDelay", v);
-                std::cout << "TriggerDelay(us): " << v << " [" << dRange.fMin << ", " << dRange.fMax << "]" << std::endl;
-            }
+        // 应用相机参数配置
+        if (!configureCameraParams(cameraHandle, cameraParams)) {
+            std::cerr << "相机参数配置失败" << std::endl;
+            MV_CC_CloseDevice(cameraHandle);
+            MV_CC_DestroyHandle(cameraHandle);
+            projector->disConnect();
+            return false;
         }
 
         // 为回调准备上下文（线程安全计数器 + 保存目录 + 总帧数）
@@ -426,21 +581,55 @@ bool runProjectorCameraCooperation(
         };
         // 按固定次数步进，避免依赖会在跨 PatternSet 重置的设备状态计数
         for (int i = 0; i < steps * 2; ++i) {
+            std::cout << u8"\n--- 第 " << (i + 1) << u8" 帧 ---" << std::endl;
+            
             if (!projector->step()) {
-                std::cerr << u8"步进第" << i << u8"帧失败" << std::endl;
+                std::cerr << u8"步进第" << (i + 1) << u8"帧失败" << std::endl;
                 break;
             }
+            std::cout << u8"投影仪已步进到第 " << (i + 1) << u8" 张图案" << std::endl;
+            
             const bool isVerticalNow = (i < steps);
             const int waitMs = waitMsFromTiming(isVerticalNow);
+            std::cout << u8"等待投影稳定: " << waitMs << u8"ms (垂直=" << isVerticalNow << u8")" << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
 
-            // 再触发相机（软件触发）
-            MV_CC_SetEnumValueByString(cameraHandle, "AcquisitionMode", "Continuous");
-            int tRet = MV_CC_TriggerSoftwareExecute(cameraHandle);
-            if (tRet != MV_OK) {
-                std::cerr << u8"第" << i << u8"次软件触发失败，错误码: " << tRet << std::endl;
+            // 软触发相机采集
+            std::cout << u8"触发相机采集第 " << (i + 1) << u8" 帧..." << std::endl;
+            
+            // 使用正确的软触发命令
+            std::string triggerCommand;
+            MVCC_ENUMVALUE triggerSelector;
+            nRet = MV_CC_GetEnumValue(cameraHandle, "TriggerSelector", &triggerSelector);
+            if (nRet == MV_OK) {
+                if (triggerSelector.nCurValue == 0) {  // FrameStart
+                    triggerCommand = "FrameTriggerSoftware";
+                } else {
+                    triggerCommand = "TriggerSoftware";  // 用于FrameBurstStart等
+                }
+            } else {
+                triggerCommand = "TriggerSoftware";  // 默认使用
             }
-            std::this_thread::sleep_for(std::chrono::milliseconds(80));
+            
+            nRet = MV_CC_SetCommandValue(cameraHandle, triggerCommand.c_str());
+            if (nRet != MV_OK) {
+                std::cerr << u8"软触发失败: 0x" << std::hex << nRet << std::dec << std::endl;
+                break;
+            }
+            
+            // 等待相机采集完成（根据曝光时间动态调整）
+            MVCC_FLOATVALUE currentExposure;
+            int waitTimeMs = 1000; // 默认等待1秒
+            if (MV_CC_GetFloatValue(cameraHandle, "ExposureTime", &currentExposure) == MV_OK) {
+                // 等待时间 = 曝光时间 + 额外缓冲时间（500ms）
+                waitTimeMs = static_cast<int>(static_cast<double>(currentExposure.fCurValue) / 1000.0) + 500;
+                // 限制最大等待时间为5秒，避免等待过久
+                if (waitTimeMs > 5000) waitTimeMs = 5000;
+            }
+            std::cout << u8"等待相机采集完成: " << waitTimeMs << u8"ms" << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
+            
+            std::cout << u8"第 " << (i + 1) << u8" 帧采集完成" << std::endl;
         }
 
 		// ========== 4) 全部完成，停止投影与断开连接 ==========
@@ -464,41 +653,44 @@ bool runProjectorCameraCooperation(
 } // namespace slmaster_demo
 
 // 示例调用（可由外部单元测试或GUI事件触发）
- int main() {
+int main() {
 #if defined(_WIN32)
-     // 将控制台输入/输出代码页切换为 UTF-8，避免中文乱码
-     SetConsoleOutputCP(CP_UTF8);
-     SetConsoleCP(CP_UTF8);
+    // 将控制台输入/输出代码页切换为 UTF-8，避免中文乱码
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
 #endif
-     // 示例：相机序列号与保存目录可按需填写；序列号传 "NULL" 表示自动选择第一台
-     const std::string cameraSerial = "NULL"; // 或者例如 "DA1015150"
-     const std::string saveDir = "";         // 为空表示当前目录
-     // 相机参数示例：默认 -1 表示未指定，保持自动/默认；填写非负数则关闭自动并按值设置
-     // 参数含义：
-     // - exposureUs：曝光时间(微秒)；画面亮度↑/动态模糊↑/步进周期需更长
-     // - gain：增益；亮度↑/噪声↑，尽量低增益
-     // - fps：采集帧率；需与“曝光+读出+传输”匹配
-     // - trigDelayUs：触发延时(微秒)；与投影稳定时刻对齐
-     const double exposureUs = -1.0;   // 例如 8000.0 表示 8ms
-     const double gain = -1.0;         // 例如 8.0
-     const double fps = -1.0;          // 例如 60.0
-     const double trigDelayUs = -1.0;  // 例如 1000.0 表示 1ms 触发延时
+    
+    std::cout << "=== 投影仪与相机协作演示 ===" << std::endl;
+    std::cout << "本程序将自动生成相移条纹图像，并实现投影仪投影与相机采集的同步协作" << std::endl;
+    std::cout << "相机参数将从保存的配置文件中读取（如果存在）" << std::endl;
+    std::cout << std::endl;
+    
+    // 示例：相机序列号与保存目录可按需填写；序列号传 "NULL" 表示自动选择第一台
+    const std::string cameraSerial = "NULL"; // 或者例如 "DA1015150"
+    const std::string saveDir = "images";    // 图像保存目录
+    
+    bool success = slmaster_demo::runProjectorCameraCooperation(
+        "DLP4710",      // 投影仪型号
+        1920,           // 投影宽度
+        1080,           // 投影高度
+        4,              // 相移步数
+        32,             // 条纹频率
+        100,            // 条纹强度
+        128,            // 亮度偏移
+        0.0,            // 噪声标准差
+        cameraSerial,   // 相机序列号
+        saveDir,        // 图像保存目录
+        true            // 使用保存的相机参数
+    );
 
-     slmaster_demo::runProjectorCameraCooperation(
-         "DLP4710",   // 选择型号
-         1920, 1080,   // 设备分辨率
-         4,            // 相移步数N
-         32,           // 条纹频率
-         100,          // 强度
-         128,          // 偏移
-         0.0,          // 噪声
-         cameraSerial,
-         saveDir,
-         exposureUs,
-         gain,
-         fps,
-         trigDelayUs
-     );
- }
+    if (success) {
+        std::cout << u8"投影仪与相机协作演示完成！" << std::endl;
+        std::cout << u8"图像已保存到 " << saveDir << u8" 目录" << std::endl;
+    } else {
+        std::cerr << u8"投影仪与相机协作演示失败！" << std::endl;
+    }
+
+    return success ? 0 : 1;
+}
 
 
