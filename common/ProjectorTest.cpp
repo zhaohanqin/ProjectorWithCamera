@@ -757,539 +757,269 @@ static std::vector<cv::Mat> generatePhaseShiftFringeImages(int width, int height
 }
 
 /**
- * @brief 使用自动生成的四步相移条纹图像进行步进投影测试（不依赖磁盘文件）
- * 
- * ===== 最终解决方案：智能单通道配置方案 =====
- * 本函数彻底解决了水平条纹投影全白的问题：
- * 
- * 【问题分析】：
- * 1. 双通道配置问题：DLP投影仪在双通道配置下不会按期望顺序投影，可能同时投影或混合投影
- * 2. 单通道配置问题：所有图像使用相同的isVertical_参数，导致水平条纹无法正确转置
- * 3. DLP底层转置机制：isVertical_ = false时图像会被转置(.t())，但单通道配置无法区分不同方向的图像
- * 
- * 【最终解决方案】：
- * - 使用单通道配置：创建1个PatternOrderSet，包含所有8张图像
- * - 直接生成8张相同分辨率的图像：4张垂直条纹 + 4张水平条纹（都是1920x1080）
- * - 统一配置参数：isVertical_ = true，patternArrayCounts_ = deviceWidth
- * - 优化时序参数：增加曝光时间到8ms，确保投影稳定
- * - 顺序投影：投影仪按顺序投影所有图像，前N张垂直条纹，后N张水平条纹
- * 
- * 【技术细节】：
- * - 生成顺序：先4张垂直条纹，再4张水平条纹（总共8张）
- * - 图像分辨率：所有8张图像都是1920x1080，完全一致
- * - 条纹生成：垂直条纹沿x轴变化，水平条纹沿y轴变化，确保物理特性正确
- * - 图案集配置：单通道配置，isVertical_=true，patternArrayCounts_=1920
- * - 时序优化：曝光时间8ms，预曝光5ms，后曝光5ms，确保投影稳定
- * - 步进投影：8次步进，按顺序投影所有图像
- * 
- * 【优势】：
- * - 彻底解决水平条纹投影全白问题
- * - 简化配置，避免复杂的双通道设置
- * - 直接使用生成的图像，避免转置和分辨率调整
- * - 确保投影顺序的完全可控性
- * - 提高结构光投影的可靠性和一致性
- * 
- * 【新增功能】：
- * - 投影前图案预览：在每次投影之前显示即将投影的图案
- * - 便于诊断问题：确认图案生成、加载和投影的每个环节
- * - 交互式控制：用户可以在查看图案后决定是否继续投影
+ * @brief 使用自动生成的四步相移条纹图像进行步进投影测试（仅垂直条纹）
+ * @details 逻辑与 testProjectorStepWithGeneratedFringes 一致，但仅生成并投影垂直方向条纹
  */
-void testProjectorStepWithGeneratedFringes() {
-    std::cout << "\n--- 测试步进投影（自动生成四步相移条纹） ---" << std::endl;
+void testProjectorStepWithGeneratedVerticalFringes() {
+    std::cout << "\n--- 测试步进投影（自动生成四步相移垂直条纹） ---" << std::endl;
 
     auto projectorFactory = slmaster::device::ProjectorFactory();
     auto projectorDlpcApi = projectorFactory.getProjector(testProjector4710);
     bool isSucess = projectorDlpcApi->connect();
     assertTrue(isSucess, "投影仪连接成功");
 
-    // 设备分辨率：请根据实际设备设置（示例为DLP4710常见分辨率）
     const int deviceWidth = 1920;
     const int deviceHeight = 1080;
 
-    // 生成参数（与 generate_fringe_patterns.py 对齐）
-    const int steps = 4;          // 相移步数N，可根据需要调整
-    const int frequency = 32;     // 条纹频率/周期数
+    const int steps = 4;          // 相移步数
+    const int frequency = 15;     // 条纹频率/周期数
     const int intensity = 100;    // 振幅
     const int offset = 128;       // 亮度偏移
     const double noise = 0.0;     // 噪声标准差
 
-    auto imgs = generatePhaseShiftFringeImages(deviceWidth, deviceHeight,
+    auto imgsAll = generatePhaseShiftFringeImages(deviceWidth, deviceHeight,
         frequency, intensity, offset, noise, steps);
 
-    assertTrue(static_cast<int>(imgs.size()) == steps * 2, "生成2N张相移条纹图像");
-    for (const auto& m : imgs) {
+    assertTrue(static_cast<int>(imgsAll.size()) == steps * 2, "生成2N张相移条纹图像");
+    for (const auto& m : imgsAll) {
         assertTrue(m.type() == CV_8UC1, "图像为单通道8位灰度");
         assertTrue(m.cols == deviceWidth && m.rows == deviceHeight, "图像分辨率与设备一致");
     }
 
-    std::cout << "成功生成 " << imgs.size() << " 张条纹图像" << std::endl;
+    // 仅选取前 N 张（垂直条纹）
+    std::vector<cv::Mat> imgs(imgsAll.begin(), imgsAll.begin() + steps);
+    std::cout << "成功生成 " << imgs.size() << " 张垂直条纹图像" << std::endl;
 
-    // ===== 单通道配置方案（简化方案） =====
-    // 核心思想：
-    // 1. 直接生成8张相同分辨率的图像（1920x1080）
-    // 2. 4张垂直条纹 + 4张水平条纹
-    // 3. 放在一个图案集里进行步进操作
-    // 4. 避免复杂的双通道配置和转置操作
-    
     std::vector<slmaster::device::PatternOrderSet> patternSets(1);
-
-    // ===== 配置单一图案集（包含所有8张图像） =====
-    // 根据DLP4710硬件特性调整参数
-    patternSets[0].exposureTime_ = 8000;      // 增加曝光时间到8ms，确保投影稳定
-    patternSets[0].preExposureTime_ = 5000;   // 增加预曝光时间到5ms
-    patternSets[0].postExposureTime_ = 5000;  // 增加后曝光时间到5ms
+    patternSets[0].exposureTime_ = 8000;
+    patternSets[0].preExposureTime_ = 5000;
+    patternSets[0].postExposureTime_ = 5000;
     patternSets[0].illumination_ = slmaster::device::Blue;
     patternSets[0].invertPatterns_ = false;
-    patternSets[0].isVertical_ = true;        // 统一设置为true，避免转置
-    patternSets[0].isOneBit_ = false;         // 灰度正弦
-    patternSets[0].patternArrayCounts_ = deviceWidth; // 使用设备宽度
+    patternSets[0].isVertical_ = true;           // 统一保持为 true，避免设备转置
+    patternSets[0].isOneBit_ = false;
+    patternSets[0].patternArrayCounts_ = deviceWidth;
+    patternSets[0].imgs_ = imgs;
 
-    // ===== 直接使用生成的8张图像 =====
-    // 前4张是垂直条纹，后4张是水平条纹，都是1920x1080分辨率
-    // 直接使用，不需要任何转置或重新生成
-    patternSets[0].imgs_ = imgs; // 直接将所有8张图像放入一个图案集
+    std::cout << "单通道图案集（垂直）配置完成:" << std::endl;
+    std::cout << "  图像数量: " << patternSets[0].imgs_.size() << " 张" << std::endl;
 
-    std::cout << "单通道图案集配置完成:" << std::endl;
-    std::cout << "  图案集总数: " << patternSets.size() << std::endl;
-    std::cout << "  总图像数量: " << patternSets[0].imgs_.size() << " 张" << std::endl;
-    std::cout << "  前" << steps << "张: 垂直条纹（1920x1080）" << std::endl;
-    std::cout << "  后" << steps << "张: 水平条纹（1920x1080）" << std::endl;
-    std::cout << "  图案集配置: isVertical_=" << (patternSets[0].isVertical_ ? "true" : "false") 
-              << ", patternArrayCounts_=" << patternSets[0].patternArrayCounts_ << std::endl;
-    std::cout << "  关键改进: 单通道配置，直接使用生成的8张图像，避免复杂的转置操作" << std::endl;
+    // 省略投影前的图像预览与交互，直接进入保存/加载与投影流程
 
-    // ===== 添加图像显示功能，用于诊断问题 =====
-    std::cout << "\n=== 图像诊断信息 ===" << std::endl;
-    
-    // 显示前4张图像（应该是垂直条纹）
-    std::cout << "前4张图像（垂直条纹）：" << std::endl;
-    for (size_t i = 0; i < std::min(static_cast<size_t>(4), imgs.size()); ++i) {
-        std::cout << "  图像 " << i << ": 尺寸=" << imgs[i].cols << "x" << imgs[i].rows 
-                  << ", 类型=" << imgs[i].type() << ", 通道数=" << imgs[i].channels() << std::endl;
-        
-        // 显示图像（使用OpenCV的imshow）
-        std::string windowName = "Vertical Fringe " + std::to_string(i);
-        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
-        cv::resizeWindow(windowName, 800, 600); // 调整窗口大小便于查看
-        cv::imshow(windowName, imgs[i]);
-        
-        // 等待用户按键，让用户有时间查看每张图像
-        std::cout << "  按任意键查看下一张图像..." << std::endl;
-        cv::waitKey(0);
-        cv::destroyWindow(windowName);
-    }
-    
-    // 显示后4张图像（应该是水平条纹）
-    std::cout << "后4张图像（水平条纹）：" << std::endl;
-    for (size_t i = steps; i < imgs.size(); ++i) {
-        std::cout << "  图像 " << i << ": 尺寸=" << imgs[i].cols << "x" << imgs[i].rows 
-                  << ", 类型=" << imgs[i].type() << ", 通道数=" << imgs[i].channels() << std::endl;
-        
-        // 显示图像
-        std::string windowName = "Horizontal Fringe " + std::to_string(i);
-        cv::namedWindow(windowName, cv::WINDOW_NORMAL);
-        cv::resizeWindow(windowName, 800, 600);
-        cv::imshow(windowName, imgs[i]);
-        
-        std::cout << "  按任意键查看下一张图像..." << std::endl;
-        cv::waitKey(0);
-        cv::destroyWindow(windowName);
-    }
-    
-    // 显示图案集配置信息
-    std::cout << "\n=== 图案集配置信息 ===" << std::endl;
-    for (size_t i = 0; i < patternSets.size(); ++i) {
-        std::cout << "图案集 " << i << ":" << std::endl;
-        std::cout << "  isVertical_: " << (patternSets[i].isVertical_ ? "true" : "false") << std::endl;
-        std::cout << "  patternArrayCounts_: " << patternSets[i].patternArrayCounts_ << std::endl;
-        std::cout << "  exposureTime_: " << patternSets[i].exposureTime_ << std::endl;
-        std::cout << "  illumination_: " << static_cast<int>(patternSets[i].illumination_) << std::endl;
-        std::cout << "  图像数量: " << patternSets[i].imgs_.size() << std::endl;
-        std::cout << "  包含条纹类型: 垂直条纹(" << steps << "张) + 水平条纹(" << steps << "张)" << std::endl;
-    }
-    
-    std::cout << "\n按任意键继续投影测试..." << std::endl;
-    cv::waitKey(0);
-    
-    // 保存生成的图像到磁盘，便于进一步分析
-    std::cout << "\n=== 保存图像到磁盘 ===" << std::endl;
-    std::string saveDir = "debug_fringe_images";
-    
-    // 创建保存目录
+    // 保存图像
+    std::string saveDir = "debug_fringe_images_vertical";
     if (!std::filesystem::exists(saveDir)) {
         std::filesystem::create_directory(saveDir);
         std::cout << "创建目录: " << saveDir << std::endl;
     }
-    
-    // 保存前4张垂直条纹图像
-    for (size_t i = 0; i < std::min(static_cast<size_t>(4), imgs.size()); ++i) {
+    for (size_t i = 0; i < imgs.size(); ++i) {
         std::string filename = saveDir + "/vertical_fringe_" + std::to_string(i) + ".png";
         bool saveSuccess = cv::imwrite(filename, imgs[i]);
-        if (saveSuccess) {
-            std::cout << "保存垂直条纹图像 " << i << " 到: " << filename << std::endl;
-        } else {
-            std::cout << "保存垂直条纹图像 " << i << " 失败" << std::endl;
-        }
+        std::cout << (saveSuccess ? "保存成功: " : "保存失败: ") << filename << std::endl;
     }
-    
-    // 保存后4张水平条纹图像
-    for (size_t i = steps; i < imgs.size(); ++i) {
-        std::string filename = saveDir + "/horizontal_fringe_" + std::to_string(i) + ".png";
-        bool saveSuccess = cv::imwrite(filename, imgs[i]);
-        if (saveSuccess) {
-            std::cout << "保存水平条纹图像 " << i << " 到: " << filename << std::endl;
-        } else {
-            std::cout << "保存水平条纹图像 " << i << " 失败" << std::endl;
-        }
-    }
-    
     std::cout << "图像保存完成，目录: " << std::filesystem::absolute(saveDir).string() << std::endl;
 
-    // 将图案数据加载到投影仪内部闪存
+    // 加载到设备
     std::cout << "开始加载图案数据到投影仪..." << std::endl;
     isSucess = projectorDlpcApi->populatePatternTableData(patternSets);
-    assertTrue(isSucess, "生成条纹数据加载成功");
-    
-    if (!isSucess) {
-        std::cout << "图案数据加载失败，无法继续测试" << std::endl;
-        projectorDlpcApi->disConnect();
-        return;
-    }
+    assertTrue(isSucess, "垂直条纹数据加载成功");
+    if (!isSucess) { projectorDlpcApi->disConnect(); return; }
 
-    // ===== 投影仪状态重置和缓存清理 =====
-    std::cout << "执行投影仪状态重置和缓存清理..." << std::endl;
-    
-    // 1. 停止当前投影（如果有的话）
+    // 重置设备状态并重新加载，确保稳定
     projectorDlpcApi->stop();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
-    
-    // 2. 断开并重新连接，清理内部状态
-    std::cout << "  断开连接以清理内部状态..." << std::endl;
     projectorDlpcApi->disConnect();
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    
-    std::cout << "  重新连接投影仪..." << std::endl;
     isSucess = projectorDlpcApi->connect();
     assertTrue(isSucess, "重新连接投影仪成功");
-    
-    if (!isSucess) {
-        std::cout << "重新连接失败，无法继续测试" << std::endl;
-        return;
-    }
-    
-    // 3. 重新加载图案数据
-    std::cout << "  重新加载图案数据..." << std::endl;
+    if (!isSucess) { return; }
     isSucess = projectorDlpcApi->populatePatternTableData(patternSets);
     assertTrue(isSucess, "重新加载图案数据成功");
-    
-    if (!isSucess) {
-        std::cout << "重新加载图案数据失败，无法继续测试" << std::endl;
-        projectorDlpcApi->disConnect();
-        return;
-    }
-    
-    std::cout << "投影仪状态重置和缓存清理完成" << std::endl;
+    if (!isSucess) { projectorDlpcApi->disConnect(); return; }
 
-    std::cout << "图案数据加载成功，开始设置LED亮度..." << std::endl;
-
-    // 开启LED并设置亮度（确保投影仪有光源）
-    // 对于DLP4710，建议使用较高的亮度以确保投影质量
-    isSucess = projectorDlpcApi->setLEDCurrent(0.9, 0.9, 0.9); // 设置90%亮度，提高投影质量
+    // 设置LED并进入投影模式
+    isSucess = projectorDlpcApi->setLEDCurrent(0.9, 0.9, 0.9);
     assertTrue(isSucess, "LED亮度设置成功");
-
-    if (!isSucess) {
-        std::cout << "LED亮度设置失败，但继续尝试投影..." << std::endl;
-    }
-
-    // 开始连续投影模式，确保投影仪能正常显示
     std::cout << "开始连续投影模式..." << std::endl;
     isSucess = projectorDlpcApi->project(true);
     assertTrue(isSucess, "连续投影模式开始成功");
-    
-    if (!isSucess) {
-        std::cout << "投影模式启动失败，无法继续测试" << std::endl;
-        projectorDlpcApi->disConnect();
-        return;
-    }
+    if (!isSucess) { projectorDlpcApi->disConnect(); return; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
-    // 等待投影仪稳定
-    std::cout << "等待投影仪稳定..." << std::endl;
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // 增加等待时间到2秒
-
-    // ===== 投影前的最终状态验证 =====
-    std::cout << "\n=== 投影前最终状态验证 ===" << std::endl;
-    
-    // 1. 验证连接状态
-    bool isConnected = projectorDlpcApi->isConnect();
-    std::cout << "投影仪连接状态: " << (isConnected ? "已连接" : "未连接") << std::endl;
-    
-    // 2. 停止当前投影
+    // 停止并重新开始，作为最终校验
     std::cout << "停止当前投影..." << std::endl;
     projectorDlpcApi->stop();
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    
-    // 3. 重新开始投影模式
     std::cout << "重新开始投影模式..." << std::endl;
     isSucess = projectorDlpcApi->project(true);
     assertTrue(isSucess, "投影模式重新开始成功");
-    
-    if (!isSucess) {
-        std::cout << "投影模式重新开始失败，无法继续测试" << std::endl;
-        projectorDlpcApi->disConnect();
-        return;
-    }
-    
-    // 4. 等待投影仪完全稳定
-    std::cout << "等待投影仪完全稳定..." << std::endl;
+    if (!isSucess) { projectorDlpcApi->disConnect(); return; }
     std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-    
-    std::cout << "投影前状态验证完成" << std::endl;
 
-    // ===== 投影模式选择 =====
-    std::cout << "\n=== 投影模式选择 ===" << std::endl;
-    std::cout << "请选择投影模式：" << std::endl;
-    std::cout << "1. 标准模式（推荐）：每次步进前清理缓存" << std::endl;
-    std::cout << "2. 激进模式：每次步进前完全重置投影仪" << std::endl;
-    std::cout << "请输入选择 (1 或 2): ";
-    
-    int projectionMode;
-    std::cin >> projectionMode;
-    
-    if (projectionMode != 1 && projectionMode != 2) {
-        projectionMode = 1; // 默认使用标准模式
-        std::cout << "无效选择，使用默认标准模式" << std::endl;
-    }
-    
-    std::cout << "选择的投影模式: " << (projectionMode == 1 ? "标准模式" : "激进模式") << std::endl;
+    const int totalFrames = steps;
+    std::cout << "开始步进投影垂直条纹，总共 " << totalFrames << " 帧..." << std::endl;
 
-    // 单通道配置下的步进投影策略
-    // 说明：所有8张图像都在一个图案集中，按顺序投影
-    const int totalFrames = steps * 2;
-    std::cout << "开始步进投影，总共 " << totalFrames << " 帧..." << std::endl;
-    std::cout << "投影顺序：前" << steps << "张垂直条纹，后" << steps << "张水平条纹（都在同一个图案集中）" << std::endl;
-    
-    // ===== 新增功能：投影前图案预览 =====
-    std::cout << "\n=== 重要提示：投影前图案预览功能 ===" << std::endl;
-    std::cout << "在每次投影之前，程序会显示即将投影的图案，让你能够：" << std::endl;
-    std::cout << "1. 确认图案生成是否正确" << std::endl;
-    std::cout << "2. 验证图案是否被正确加载到投影仪" << std::endl;
-    std::cout << "3. 诊断投影问题出现在哪个环节" << std::endl;
-    std::cout << "操作说明：" << std::endl;
-    std::cout << "- 查看图案后，按任意键开始投影" << std::endl;
-    std::cout << "- 按 'q' 键可以退出测试" << std::endl;
-    std::cout << "=========================================" << std::endl;
-    
     for (int i = 0; i < totalFrames; ++i) {
-        std::cout << "\n=== 执行第 " << (i + 1) << " 次步进 ===" << std::endl;
-        
-        // ===== 单通道配置下的图案信息显示 =====
-        // 所有图案都在同一个图案集（索引0）中，按顺序排列
-        const bool isVertical = (i < steps);
-        const int patternSetIndex = 0; // 单通道配置，只有一个图案集
-        const int patternIndex = i; // 图案在图案集中的索引，即为步进次数
-        
-        std::cout << "当前图案信息:" << std::endl;
-        std::cout << "  图案集索引: " << patternSetIndex << " (单通道配置)" << std::endl;
-        std::cout << "  图案在集合中的索引: " << patternIndex << std::endl;
-        std::cout << "  图案类型: " << (isVertical ? "垂直条纹" : "水平条纹") << std::endl;
-        std::cout << "  相移步进: " << (isVertical ? (i % steps) : ((i - steps) % steps)) + 1 << "/" << steps << std::endl;
-        std::cout << "  图案集配置:" << std::endl;
-        std::cout << "    isVertical_: " << (patternSets[patternSetIndex].isVertical_ ? "true" : "false") << std::endl;
-        std::cout << "    patternArrayCounts_: " << patternSets[patternSetIndex].patternArrayCounts_ << std::endl;
-        std::cout << "    exposureTime_: " << patternSets[patternSetIndex].exposureTime_ << std::endl;
-        
-        // 显示当前图案的图像信息
-        if (patternIndex < static_cast<int>(patternSets[patternSetIndex].imgs_.size())) {
-            const cv::Mat& currentImg = patternSets[patternSetIndex].imgs_[patternIndex];
-            std::cout << "  当前图案图像:" << std::endl;
-            std::cout << "    尺寸: " << currentImg.cols << "x" << currentImg.rows << std::endl;
-            std::cout << "    类型: " << currentImg.type() << std::endl;
-            std::cout << "    通道数: " << currentImg.channels() << std::endl;
-            
-            // 计算并显示图像的统计信息
-            double minVal, maxVal, meanVal, stdDevVal;
-            cv::minMaxLoc(currentImg, &minVal, &maxVal);
-            
-            // 正确使用cv::meanStdDev函数
-            cv::Mat meanMat, stdDevMat;
-            cv::meanStdDev(currentImg, meanMat, stdDevMat);
-            meanVal = meanMat.at<double>(0, 0);
-            stdDevVal = stdDevMat.at<double>(0, 0);
-            
-            std::cout << "    像素值范围: [" << minVal << ", " << maxVal << "]" << std::endl;
-            std::cout << "    平均像素值: " << meanVal << std::endl;
-            std::cout << "    标准差: " << stdDevVal << std::endl;
-        }
-        
-        // ===== 在投影之前显示要投影的图案 =====
-        std::cout << "\n--- 显示即将投影的图案 ---" << std::endl;
-        
-        // 获取当前要投影的图案
-        if (patternIndex < static_cast<int>(patternSets[patternSetIndex].imgs_.size())) {
-            const cv::Mat& currentImg = patternSets[patternSetIndex].imgs_[patternIndex];
-            
-            // 创建窗口显示图案
-            std::string previewWindowName = "即将投影的图案 - 第" + std::to_string(i + 1) + "帧";
-            cv::namedWindow(previewWindowName, cv::WINDOW_NORMAL);
-            cv::resizeWindow(previewWindowName, 800, 600);
-            
-            // 显示图案
-            cv::imshow(previewWindowName, currentImg);
-            
-            // 显示图案详细信息
-            std::cout << "图案预览信息:" << std::endl;
-            std::cout << "  尺寸: " << currentImg.cols << "x" << currentImg.rows << std::endl;
-            std::cout << "  类型: " << currentImg.type() << " (CV_8UC1)" << std::endl;
-            std::cout << "  通道数: " << currentImg.channels() << std::endl;
-            
-            // 计算并显示图像的统计信息
-            double minVal, maxVal, meanVal, stdDevVal;
-            cv::minMaxLoc(currentImg, &minVal, &maxVal);
-            
-            cv::Mat meanMat, stdDevMat;
-            cv::meanStdDev(currentImg, meanMat, stdDevMat);
-            meanVal = meanMat.at<double>(0, 0);
-            stdDevVal = stdDevMat.at<double>(0, 0);
-            
-            std::cout << "  像素值范围: [" << minVal << ", " << maxVal << "]" << std::endl;
-            std::cout << "  平均像素值: " << meanVal << std::endl;
-            std::cout << "  标准差: " << stdDevVal << std::endl;
-            
-            // 显示条纹方向信息
-            std::cout << "  条纹方向: " << (isVertical ? "垂直（沿x轴变化）" : "水平（沿y轴变化）") << std::endl;
-            std::cout << "  相移步进: " << (isVertical ? (i % steps) : ((i - steps) % steps)) + 1 << "/" << steps << std::endl;
-            
-            // 等待用户确认，让用户有时间查看图案
-            std::cout << "\n请查看即将投影的图案..." << std::endl;
-            std::cout << "按任意键开始投影此图案，或按 'q' 退出测试..." << std::endl;
-            
-            int key = cv::waitKey(0);
-            if (key == 'q' || key == 'Q') {
-                std::cout << "用户选择退出测试" << std::endl;
-                cv::destroyWindow(previewWindowName);
-                break;
-            }
-            
-            // 关闭预览窗口
-            cv::destroyWindow(previewWindowName);
-        }
-        
-        // ===== 步进前的缓存清理和状态验证 =====
-        std::cout << "\n--- 步进前缓存清理 (" << (projectionMode == 1 ? "标准模式" : "激进模式") << ") ---" << std::endl;
-        
-        // 1. 验证投影仪连接状态
-        bool isConnected = projectorDlpcApi->isConnect();
-        std::cout << "  投影仪连接状态: " << (isConnected ? "已连接" : "未连接") << std::endl;
-        
-        if (!isConnected) {
-            std::cout << "  投影仪连接丢失，尝试重新连接..." << std::endl;
+        std::cout << "\n=== 执行第 " << (i + 1) << " 次步进（垂直） ===" << std::endl;
+
+        // 确保连接
+        if (!projectorDlpcApi->isConnect()) {
             isSucess = projectorDlpcApi->connect();
-            if (!isSucess) {
-                std::cout << "  重新连接失败，停止测试" << std::endl;
-                break;
-            }
+            if (!isSucess) { std::cout << "重新连接失败，停止测试" << std::endl; break; }
         }
-        
-        if (projectionMode == 1) {
-            // 标准模式：短暂停止投影，清理内部缓存
-            std::cout << "  标准模式：短暂停止投影以清理内部缓存..." << std::endl;
-            projectorDlpcApi->stop();
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            
-            // 重新开始投影模式
-            std::cout << "  重新开始投影模式..." << std::endl;
-            isSucess = projectorDlpcApi->project(true);
-            if (!isSucess) {
-                std::cout << "  重新开始投影模式失败，停止测试" << std::endl;
-                break;
-            }
-            
-            // 等待投影仪稳定
-            std::cout << "  等待投影仪稳定..." << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            
-        } else if (projectionMode == 2) {
-            // 激进模式：完全重置投影仪
-            std::cout << "  激进模式：完全重置投影仪..." << std::endl;
-            
-            // 停止投影
-            projectorDlpcApi->stop();
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            
-            // 断开连接
-            std::cout << "  断开连接以完全清理状态..." << std::endl;
-            projectorDlpcApi->disConnect();
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-            
-            // 重新连接
-            std::cout << "  重新连接投影仪..." << std::endl;
-            isSucess = projectorDlpcApi->connect();
-            if (!isSucess) {
-                std::cout << "  重新连接失败，停止测试" << std::endl;
-                break;
-            }
-            
-            // 重新加载图案数据
-            std::cout << "  重新加载图案数据..." << std::endl;
-            isSucess = projectorDlpcApi->populatePatternTableData(patternSets);
-            if (!isSucess) {
-                std::cout << "  重新加载图案数据失败，停止测试" << std::endl;
-                break;
-            }
-            
-            // 重新开始投影模式
-            std::cout << "  重新开始投影模式..." << std::endl;
-            isSucess = projectorDlpcApi->project(true);
-            if (!isSucess) {
-                std::cout << "  重新开始投影模式失败，停止测试" << std::endl;
-                break;
-            }
-            
-            // 等待投影仪完全稳定
-            std::cout << "  等待投影仪完全稳定..." << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        }
-        
-        std::cout << "\n开始执行步进操作..." << std::endl;
+
+        // 步进
         isSucess = projectorDlpcApi->step();
-        assertTrue(isSucess, "步进第" + std::to_string(i + 1) + "步");
-        
-        if (!isSucess) {
-            std::cout << "第 " << (i + 1) << " 次步进失败，停止测试" << std::endl;
-            break;
-        }
-        
-        // 5. 步进后等待图像完全加载和稳定
-        std::cout << "  等待图像完全加载和稳定..." << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(800));
-        
-        // ===== 单通道配置下的等待时间计算 =====
-        // 所有图案都使用相同的时序参数
+        assertTrue(isSucess, "步进第" + std::to_string(i + 1) + "步（垂直）");
+        if (!isSucess) { std::cout << "步进失败，停止测试" << std::endl; break; }
+
+        // 等待稳定
         const int exposureTime = patternSets[0].exposureTime_;
         const int preTime = patternSets[0].preExposureTime_;
         const int postTime = patternSets[0].postExposureTime_;
         const int totalTimeMs = (preTime + exposureTime + postTime) / 1000;
-        
-        // 增加等待时间，确保投影稳定
-        // 对于DLP投影仪，需要足够的时间来稳定显示图案
-        const int waitTimeMs = std::max(totalTimeMs + 500, 1500); // 最少1.5秒，确保投影稳定
-        
-        std::cout << "投影第" << (i + 1) << "帧图案（" << (isVertical ? "垂直" : "水平") << "条纹），等待" << waitTimeMs << "ms..." << std::endl;
+        const int waitTimeMs = std::max(totalTimeMs + 500, 1500);
         std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
-        
-        std::cout << "第" << (i + 1) << "帧投影完成" << std::endl;
     }
 
-    std::cout << "所有帧投影完成，停止投影..." << std::endl;
     isSucess = projectorDlpcApi->stop();
-    assertTrue(isSucess, "投影停止成功");
-    
-    std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 等待投影仪完全停止
-    
+    assertTrue(isSucess, "投影停止成功（垂直）");
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     isSucess = projectorDlpcApi->disConnect();
-    assertTrue(isSucess, "断开连接操作成功");
-    
-    std::cout << "自动生成条纹测试完成" << std::endl;
+    assertTrue(isSucess, "断开连接操作成功（垂直）");
+}
+
+/**
+ * @brief 使用自动生成的四步相移条纹图像进行步进投影测试（仅水平条纹）
+ * @details 逻辑与 testProjectorStepWithGeneratedFringes 一致，但仅生成并投影水平方向条纹
+ */
+void testProjectorStepWithGeneratedHorizontalFringes() {
+    std::cout << "\n--- 测试步进投影（自动生成四步相移水平条纹） ---" << std::endl;
+
+    auto projectorFactory = slmaster::device::ProjectorFactory();
+    auto projectorDlpcApi = projectorFactory.getProjector(testProjector4710);
+    bool isSucess = projectorDlpcApi->connect();
+    assertTrue(isSucess, "投影仪连接成功");
+
+    const int deviceWidth = 1920;
+    const int deviceHeight = 1080;
+
+    const int steps = 4;
+    const int frequency = 15;
+    const int intensity = 100;
+    const int offset = 128;
+    const double noise = 0.0;
+
+    auto imgsAll = generatePhaseShiftFringeImages(deviceWidth, deviceHeight,
+        frequency, intensity, offset, noise, steps);
+
+    assertTrue(static_cast<int>(imgsAll.size()) == steps * 2, "生成2N张相移条纹图像");
+    for (const auto& m : imgsAll) {
+        assertTrue(m.type() == CV_8UC1, "图像为单通道8位灰度");
+        assertTrue(m.cols == deviceWidth && m.rows == deviceHeight, "图像分辨率与设备一致");
+    }
+
+    // 仅选取后 N 张（水平条纹）
+    std::vector<cv::Mat> imgs(imgsAll.begin() + steps, imgsAll.end());
+    std::cout << "成功生成 " << imgs.size() << " 张水平条纹图像" << std::endl;
+
+    std::vector<slmaster::device::PatternOrderSet> patternSets(1);
+    patternSets[0].exposureTime_ = 8000;
+    patternSets[0].preExposureTime_ = 5000;
+    patternSets[0].postExposureTime_ = 5000;
+    patternSets[0].illumination_ = slmaster::device::Blue;
+    patternSets[0].invertPatterns_ = false;
+    patternSets[0].isVertical_ = false;           // 统一保持为 true，避免设备转置
+    patternSets[0].isOneBit_ = false;
+    patternSets[0].patternArrayCounts_ = deviceWidth;
+    patternSets[0].imgs_ = imgs;
+
+    std::cout << "单通道图案集（水平）配置完成:" << std::endl;
+    std::cout << "  图像数量: " << patternSets[0].imgs_.size() << " 张" << std::endl;
+
+    // 省略投影前的图像预览与交互，直接进入保存/加载与投影流程
+
+    // 保存图像
+    std::string saveDir = "debug_fringe_images_horizontal";
+    if (!std::filesystem::exists(saveDir)) {
+        std::filesystem::create_directory(saveDir);
+        std::cout << "创建目录: " << saveDir << std::endl;
+    }
+    for (size_t i = 0; i < imgs.size(); ++i) {
+        std::string filename = saveDir + "/horizontal_fringe_" + std::to_string(i) + ".png";
+        bool saveSuccess = cv::imwrite(filename, imgs[i]);
+        std::cout << (saveSuccess ? "保存成功: " : "保存失败: ") << filename << std::endl;
+    }
+    std::cout << "图像保存完成，目录: " << std::filesystem::absolute(saveDir).string() << std::endl;
+
+    // 加载到设备
+    std::cout << "开始加载图案数据到投影仪..." << std::endl;
+    isSucess = projectorDlpcApi->populatePatternTableData(patternSets);
+    assertTrue(isSucess, "水平条纹数据加载成功");
+    if (!isSucess) { projectorDlpcApi->disConnect(); return; }
+
+    // 重置设备状态并重新加载，确保稳定
+    projectorDlpcApi->stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    projectorDlpcApi->disConnect();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    isSucess = projectorDlpcApi->connect();
+    assertTrue(isSucess, "重新连接投影仪成功");
+    if (!isSucess) { return; }
+    isSucess = projectorDlpcApi->populatePatternTableData(patternSets);
+    assertTrue(isSucess, "重新加载图案数据成功");
+    if (!isSucess) { projectorDlpcApi->disConnect(); return; }
+
+    // 设置LED并进入投影模式
+    isSucess = projectorDlpcApi->setLEDCurrent(0.9, 0.9, 0.9);
+    assertTrue(isSucess, "LED亮度设置成功");
+    std::cout << "开始连续投影模式..." << std::endl;
+    isSucess = projectorDlpcApi->project(true);
+    assertTrue(isSucess, "连续投影模式开始成功");
+    if (!isSucess) { projectorDlpcApi->disConnect(); return; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+
+    // 停止并重新开始，作为最终校验
+    std::cout << "停止当前投影..." << std::endl;
+    projectorDlpcApi->stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    std::cout << "重新开始投影模式..." << std::endl;
+    isSucess = projectorDlpcApi->project(true);
+    assertTrue(isSucess, "投影模式重新开始成功");
+    if (!isSucess) { projectorDlpcApi->disConnect(); return; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+
+    const int totalFrames = steps;
+    std::cout << "开始步进投影水平条纹，总共 " << totalFrames << " 帧..." << std::endl;
+
+    for (int i = 0; i < totalFrames; ++i) {
+        std::cout << "\n=== 执行第 " << (i + 1) << " 次步进（水平） ===" << std::endl;
+
+        // 确保连接
+        if (!projectorDlpcApi->isConnect()) {
+            isSucess = projectorDlpcApi->connect();
+            if (!isSucess) { std::cout << "重新连接失败，停止测试" << std::endl; break; }
+        }
+
+        // 步进
+        isSucess = projectorDlpcApi->step();
+        assertTrue(isSucess, "步进第" + std::to_string(i + 1) + "步（水平）");
+        if (!isSucess) { std::cout << "步进失败，停止测试" << std::endl; break; }
+
+        // 等待稳定
+        const int exposureTime = patternSets[0].exposureTime_;
+        const int preTime = patternSets[0].preExposureTime_;
+        const int postTime = patternSets[0].postExposureTime_;
+        const int totalTimeMs = (preTime + exposureTime + postTime) / 1000;
+        const int waitTimeMs = std::max(totalTimeMs + 500, 1500);
+        std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
+    }
+
+    isSucess = projectorDlpcApi->stop();
+    assertTrue(isSucess, "投影停止成功（水平）");
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    isSucess = projectorDlpcApi->disConnect();
+    assertTrue(isSucess, "断开连接操作成功（水平）");
 }
 
 // ==================== 图像生成验证测试 ====================
@@ -1429,7 +1159,7 @@ void testProjectorGetSetLEDCurrent() {
 void runAllTests() {
     std::cout << getLocalizedString("开始运行投影仪功能测试...", "Starting projector functionality tests...") << std::endl;
 
-    
+    /*
     // 基础功能测试
     testProjectorInit();//测试投影仪的初始化是否成功
     testProjectorGetInfo();//测试投影仪的获取信息是否成功
@@ -1457,11 +1187,13 @@ void runAllTests() {
 
     // 图像生成验证测试（独立测试，不涉及投影仪）
     testImageGeneration();//测试图像生成函数是否正确生成垂直和水平条纹
-
+    */
     
     
     // 自动生成条纹测试
-    testProjectorStepWithGeneratedFringes();//测试投影仪的自动生成条纹步进投影是否成功
+    testProjectorStepWithGeneratedFringes();//拆分为垂直/水平两个单独测试以避免互相影响
+    testProjectorStepWithGeneratedVerticalFringes();
+    testProjectorStepWithGeneratedHorizontalFringes();
 
     
     // LED控制测试
