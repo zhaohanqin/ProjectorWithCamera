@@ -956,6 +956,40 @@ void testProjectorStepWithGeneratedFringes() {
         return;
     }
 
+    // ===== 投影仪状态重置和缓存清理 =====
+    std::cout << "执行投影仪状态重置和缓存清理..." << std::endl;
+    
+    // 1. 停止当前投影（如果有的话）
+    projectorDlpcApi->stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    // 2. 断开并重新连接，清理内部状态
+    std::cout << "  断开连接以清理内部状态..." << std::endl;
+    projectorDlpcApi->disConnect();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    std::cout << "  重新连接投影仪..." << std::endl;
+    isSucess = projectorDlpcApi->connect();
+    assertTrue(isSucess, "重新连接投影仪成功");
+    
+    if (!isSucess) {
+        std::cout << "重新连接失败，无法继续测试" << std::endl;
+        return;
+    }
+    
+    // 3. 重新加载图案数据
+    std::cout << "  重新加载图案数据..." << std::endl;
+    isSucess = projectorDlpcApi->populatePatternTableData(patternSets);
+    assertTrue(isSucess, "重新加载图案数据成功");
+    
+    if (!isSucess) {
+        std::cout << "重新加载图案数据失败，无法继续测试" << std::endl;
+        projectorDlpcApi->disConnect();
+        return;
+    }
+    
+    std::cout << "投影仪状态重置和缓存清理完成" << std::endl;
+
     std::cout << "图案数据加载成功，开始设置LED亮度..." << std::endl;
 
     // 开启LED并设置亮度（确保投影仪有光源）
@@ -981,6 +1015,52 @@ void testProjectorStepWithGeneratedFringes() {
     // 等待投影仪稳定
     std::cout << "等待投影仪稳定..." << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // 增加等待时间到2秒
+
+    // ===== 投影前的最终状态验证 =====
+    std::cout << "\n=== 投影前最终状态验证 ===" << std::endl;
+    
+    // 1. 验证连接状态
+    bool isConnected = projectorDlpcApi->isConnect();
+    std::cout << "投影仪连接状态: " << (isConnected ? "已连接" : "未连接") << std::endl;
+    
+    // 2. 停止当前投影
+    std::cout << "停止当前投影..." << std::endl;
+    projectorDlpcApi->stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    // 3. 重新开始投影模式
+    std::cout << "重新开始投影模式..." << std::endl;
+    isSucess = projectorDlpcApi->project(true);
+    assertTrue(isSucess, "投影模式重新开始成功");
+    
+    if (!isSucess) {
+        std::cout << "投影模式重新开始失败，无法继续测试" << std::endl;
+        projectorDlpcApi->disConnect();
+        return;
+    }
+    
+    // 4. 等待投影仪完全稳定
+    std::cout << "等待投影仪完全稳定..." << std::endl;
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    
+    std::cout << "投影前状态验证完成" << std::endl;
+
+    // ===== 投影模式选择 =====
+    std::cout << "\n=== 投影模式选择 ===" << std::endl;
+    std::cout << "请选择投影模式：" << std::endl;
+    std::cout << "1. 标准模式（推荐）：每次步进前清理缓存" << std::endl;
+    std::cout << "2. 激进模式：每次步进前完全重置投影仪" << std::endl;
+    std::cout << "请输入选择 (1 或 2): ";
+    
+    int projectionMode;
+    std::cin >> projectionMode;
+    
+    if (projectionMode != 1 && projectionMode != 2) {
+        projectionMode = 1; // 默认使用标准模式
+        std::cout << "无效选择，使用默认标准模式" << std::endl;
+    }
+    
+    std::cout << "选择的投影模式: " << (projectionMode == 1 ? "标准模式" : "激进模式") << std::endl;
 
     // 单通道配置下的步进投影策略
     // 说明：所有8张图像都在一个图案集中，按顺序投影
@@ -1094,6 +1174,82 @@ void testProjectorStepWithGeneratedFringes() {
             cv::destroyWindow(previewWindowName);
         }
         
+        // ===== 步进前的缓存清理和状态验证 =====
+        std::cout << "\n--- 步进前缓存清理 (" << (projectionMode == 1 ? "标准模式" : "激进模式") << ") ---" << std::endl;
+        
+        // 1. 验证投影仪连接状态
+        bool isConnected = projectorDlpcApi->isConnect();
+        std::cout << "  投影仪连接状态: " << (isConnected ? "已连接" : "未连接") << std::endl;
+        
+        if (!isConnected) {
+            std::cout << "  投影仪连接丢失，尝试重新连接..." << std::endl;
+            isSucess = projectorDlpcApi->connect();
+            if (!isSucess) {
+                std::cout << "  重新连接失败，停止测试" << std::endl;
+                break;
+            }
+        }
+        
+        if (projectionMode == 1) {
+            // 标准模式：短暂停止投影，清理内部缓存
+            std::cout << "  标准模式：短暂停止投影以清理内部缓存..." << std::endl;
+            projectorDlpcApi->stop();
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            
+            // 重新开始投影模式
+            std::cout << "  重新开始投影模式..." << std::endl;
+            isSucess = projectorDlpcApi->project(true);
+            if (!isSucess) {
+                std::cout << "  重新开始投影模式失败，停止测试" << std::endl;
+                break;
+            }
+            
+            // 等待投影仪稳定
+            std::cout << "  等待投影仪稳定..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            
+        } else if (projectionMode == 2) {
+            // 激进模式：完全重置投影仪
+            std::cout << "  激进模式：完全重置投影仪..." << std::endl;
+            
+            // 停止投影
+            projectorDlpcApi->stop();
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            
+            // 断开连接
+            std::cout << "  断开连接以完全清理状态..." << std::endl;
+            projectorDlpcApi->disConnect();
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            
+            // 重新连接
+            std::cout << "  重新连接投影仪..." << std::endl;
+            isSucess = projectorDlpcApi->connect();
+            if (!isSucess) {
+                std::cout << "  重新连接失败，停止测试" << std::endl;
+                break;
+            }
+            
+            // 重新加载图案数据
+            std::cout << "  重新加载图案数据..." << std::endl;
+            isSucess = projectorDlpcApi->populatePatternTableData(patternSets);
+            if (!isSucess) {
+                std::cout << "  重新加载图案数据失败，停止测试" << std::endl;
+                break;
+            }
+            
+            // 重新开始投影模式
+            std::cout << "  重新开始投影模式..." << std::endl;
+            isSucess = projectorDlpcApi->project(true);
+            if (!isSucess) {
+                std::cout << "  重新开始投影模式失败，停止测试" << std::endl;
+                break;
+            }
+            
+            // 等待投影仪完全稳定
+            std::cout << "  等待投影仪完全稳定..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        }
+        
         std::cout << "\n开始执行步进操作..." << std::endl;
         isSucess = projectorDlpcApi->step();
         assertTrue(isSucess, "步进第" + std::to_string(i + 1) + "步");
@@ -1102,6 +1258,10 @@ void testProjectorStepWithGeneratedFringes() {
             std::cout << "第 " << (i + 1) << " 次步进失败，停止测试" << std::endl;
             break;
         }
+        
+        // 5. 步进后等待图像完全加载和稳定
+        std::cout << "  等待图像完全加载和稳定..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
         
         // ===== 单通道配置下的等待时间计算 =====
         // 所有图案都使用相同的时序参数
