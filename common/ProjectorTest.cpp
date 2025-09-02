@@ -768,24 +768,24 @@ static std::vector<cv::Mat> generatePhaseShiftFringeImages(int width, int height
  * 3. DLP底层转置机制：isVertical_ = false时图像会被转置(.t())，但单通道配置无法区分不同方向的图像
  * 
  * 【最终解决方案】：
- * - 使用双通道配置：创建2个PatternOrderSet，分别处理垂直和水平条纹
- * - 垂直条纹配置：isVertical_ = true，patternArrayCounts_ = deviceWidth
- * - 水平条纹配置：isVertical_ = false，patternArrayCounts_ = deviceHeight
+ * - 使用单通道配置：创建1个PatternOrderSet，包含所有8张图像
+ * - 直接生成8张相同分辨率的图像：4张垂直条纹 + 4张水平条纹（都是1920x1080）
+ * - 统一配置参数：isVertical_ = true，patternArrayCounts_ = deviceWidth
  * - 优化时序参数：增加曝光时间到8ms，确保投影稳定
  * - 顺序投影：投影仪按顺序投影所有图像，前N张垂直条纹，后N张水平条纹
  * 
  * 【技术细节】：
  * - 生成顺序：先4张垂直条纹，再4张水平条纹（总共8张）
- * - 双通道分配：垂直条纹分配到图案集0，水平条纹分配到图案集1
+ * - 图像分辨率：所有8张图像都是1920x1080，完全一致
  * - 条纹生成：垂直条纹沿x轴变化，水平条纹沿y轴变化，确保物理特性正确
- * - 图案集配置：图案集0（垂直）isVertical_=true，图案集1（水平）isVertical_=false
+ * - 图案集配置：单通道配置，isVertical_=true，patternArrayCounts_=1920
  * - 时序优化：曝光时间8ms，预曝光5ms，后曝光5ms，确保投影稳定
  * - 步进投影：8次步进，按顺序投影所有图像
  * 
  * 【优势】：
  * - 彻底解决水平条纹投影全白问题
- * - 充分利用DLP4710双通道硬件特性
- * - 避免图像转置和分辨率调整问题
+ * - 简化配置，避免复杂的双通道设置
+ * - 直接使用生成的图像，避免转置和分辨率调整
  * - 确保投影顺序的完全可控性
  * - 提高结构光投影的可靠性和一致性
  * 
@@ -824,63 +824,39 @@ void testProjectorStepWithGeneratedFringes() {
 
     std::cout << "成功生成 " << imgs.size() << " 张条纹图像" << std::endl;
 
-    // ===== 双通道配置方案（DLP4710推荐方案） =====
-    // 问题分析：
-    // 1. DLP4710是双通道投影仪，单通道配置可能导致硬件不匹配
-    // 2. 双通道配置可以分别处理垂直和水平条纹，避免转置问题
-    // 3. 解决方案：使用双通道配置，分别设置垂直和水平条纹的图案集
+    // ===== 单通道配置方案（简化方案） =====
+    // 核心思想：
+    // 1. 直接生成8张相同分辨率的图像（1920x1080）
+    // 2. 4张垂直条纹 + 4张水平条纹
+    // 3. 放在一个图案集里进行步进操作
+    // 4. 避免复杂的双通道配置和转置操作
     
-    std::vector<slmaster::device::PatternOrderSet> patternSets(2);
+    std::vector<slmaster::device::PatternOrderSet> patternSets(1);
 
-    // ===== 配置第一个图案集（垂直条纹） =====
+    // ===== 配置单一图案集（包含所有8张图像） =====
     // 根据DLP4710硬件特性调整参数
     patternSets[0].exposureTime_ = 8000;      // 增加曝光时间到8ms，确保投影稳定
     patternSets[0].preExposureTime_ = 5000;   // 增加预曝光时间到5ms
     patternSets[0].postExposureTime_ = 5000;  // 增加后曝光时间到5ms
     patternSets[0].illumination_ = slmaster::device::Blue;
     patternSets[0].invertPatterns_ = false;
-    patternSets[0].isVertical_ = true;        // 垂直条纹
+    patternSets[0].isVertical_ = true;        // 统一设置为true，避免转置
     patternSets[0].isOneBit_ = false;         // 灰度正弦
     patternSets[0].patternArrayCounts_ = deviceWidth; // 使用设备宽度
 
-    // ===== 配置第二个图案集（水平条纹） =====
-    patternSets[1].exposureTime_ = 8000;      // 与第一个图案集相同的曝光时间
-    patternSets[1].preExposureTime_ = 5000;   // 与第一个图案集相同的预曝光时间
-    patternSets[1].postExposureTime_ = 5000;  // 与第一个图案集相同的后曝光时间
-    patternSets[1].illumination_ = slmaster::device::Blue;
-    patternSets[1].invertPatterns_ = false;
-    patternSets[1].isVertical_ = false;       // 水平条纹
-    patternSets[1].isOneBit_ = false;         // 灰度正弦
-    patternSets[1].patternArrayCounts_ = deviceHeight; // 使用设备高度
+    // ===== 直接使用生成的8张图像 =====
+    // 前4张是垂直条纹，后4张是水平条纹，都是1920x1080分辨率
+    // 直接使用，不需要任何转置或重新生成
+    patternSets[0].imgs_ = imgs; // 直接将所有8张图像放入一个图案集
 
-    // ===== 双通道图像分配 =====
-    // 将垂直条纹分配给第一个图案集，水平条纹分配给第二个图案集
-    std::vector<cv::Mat> verticalImages;
-    std::vector<cv::Mat> horizontalImages;
-    
-    // 前N张是垂直条纹，直接使用
-    for (int i = 0; i < steps; ++i) {
-        verticalImages.push_back(imgs[i].clone()); // 垂直条纹保持不变
-    }
-    
-    // 后N张是水平条纹，直接使用（不需要重新生成）
-    for (int i = steps; i < steps * 2; ++i) {
-        horizontalImages.push_back(imgs[i].clone()); // 水平条纹保持不变
-    }
-    
-    // 分配到对应的图案集
-    patternSets[0].imgs_ = verticalImages;   // 第一个图案集：垂直条纹
-    patternSets[1].imgs_ = horizontalImages; // 第二个图案集：水平条纹
-
-    std::cout << "双通道图案集配置完成:" << std::endl;
+    std::cout << "单通道图案集配置完成:" << std::endl;
     std::cout << "  图案集总数: " << patternSets.size() << std::endl;
-    std::cout << "  第一个图案集: " << patternSets[0].imgs_.size() << " 张垂直条纹" << std::endl;
-    std::cout << "  第二个图案集: " << patternSets[1].imgs_.size() << " 张水平条纹" << std::endl;
-    std::cout << "  第一个图案集配置: isVertical_=" << (patternSets[0].isVertical_ ? "true" : "false") 
+    std::cout << "  总图像数量: " << patternSets[0].imgs_.size() << " 张" << std::endl;
+    std::cout << "  前" << steps << "张: 垂直条纹（1920x1080）" << std::endl;
+    std::cout << "  后" << steps << "张: 水平条纹（1920x1080）" << std::endl;
+    std::cout << "  图案集配置: isVertical_=" << (patternSets[0].isVertical_ ? "true" : "false") 
               << ", patternArrayCounts_=" << patternSets[0].patternArrayCounts_ << std::endl;
-    std::cout << "  第二个图案集配置: isVertical_=" << (patternSets[1].isVertical_ ? "true" : "false") 
-              << ", patternArrayCounts_=" << patternSets[1].patternArrayCounts_ << std::endl;
-    std::cout << "  关键改进: 双通道配置，分别处理垂直和水平条纹，避免转置问题" << std::endl;
+    std::cout << "  关键改进: 单通道配置，直接使用生成的8张图像，避免复杂的转置操作" << std::endl;
 
     // ===== 添加图像显示功能，用于诊断问题 =====
     std::cout << "\n=== 图像诊断信息 ===" << std::endl;
@@ -1006,11 +982,11 @@ void testProjectorStepWithGeneratedFringes() {
     std::cout << "等待投影仪稳定..." << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // 增加等待时间到2秒
 
-    // 双通道配置下的步进投影策略
-    // 说明：垂直条纹在第一个图案集，水平条纹在第二个图案集，按顺序投影
+    // 单通道配置下的步进投影策略
+    // 说明：所有8张图像都在一个图案集中，按顺序投影
     const int totalFrames = steps * 2;
     std::cout << "开始步进投影，总共 " << totalFrames << " 帧..." << std::endl;
-    std::cout << "投影顺序：前" << steps << "张垂直条纹（图案集0），后" << steps << "张水平条纹（图案集1）" << std::endl;
+    std::cout << "投影顺序：前" << steps << "张垂直条纹，后" << steps << "张水平条纹（都在同一个图案集中）" << std::endl;
     
     // ===== 新增功能：投影前图案预览 =====
     std::cout << "\n=== 重要提示：投影前图案预览功能 ===" << std::endl;
@@ -1026,16 +1002,16 @@ void testProjectorStepWithGeneratedFringes() {
     for (int i = 0; i < totalFrames; ++i) {
         std::cout << "\n=== 执行第 " << (i + 1) << " 次步进 ===" << std::endl;
         
-        // ===== 双通道配置下的图案信息显示 =====
-        // 垂直条纹在图案集0，水平条纹在图案集1
+        // ===== 单通道配置下的图案信息显示 =====
+        // 所有图案都在同一个图案集（索引0）中，按顺序排列
         const bool isVertical = (i < steps);
-        const int patternSetIndex = isVertical ? 0 : 1; // 根据条纹方向选择图案集
-        const int patternIndex = isVertical ? i : (i - steps); // 图案在对应图案集中的索引
+        const int patternSetIndex = 0; // 单通道配置，只有一个图案集
+        const int patternIndex = i; // 图案在图案集中的索引，即为步进次数
         
         std::cout << "当前图案信息:" << std::endl;
-        std::cout << "  图案集索引: " << patternSetIndex << " (双通道配置)" << std::endl;
+        std::cout << "  图案集索引: " << patternSetIndex << " (单通道配置)" << std::endl;
         std::cout << "  图案在集合中的索引: " << patternIndex << std::endl;
-        std::cout << "  图案类型: " << (isVertical ? "垂直条纹（图案集0）" : "水平条纹（图案集1）") << std::endl;
+        std::cout << "  图案类型: " << (isVertical ? "垂直条纹" : "水平条纹") << std::endl;
         std::cout << "  相移步进: " << (isVertical ? (i % steps) : ((i - steps) % steps)) + 1 << "/" << steps << std::endl;
         std::cout << "  图案集配置:" << std::endl;
         std::cout << "    isVertical_: " << (patternSets[patternSetIndex].isVertical_ ? "true" : "false") << std::endl;
@@ -1127,11 +1103,11 @@ void testProjectorStepWithGeneratedFringes() {
             break;
         }
         
-        // ===== 双通道配置下的等待时间计算 =====
-        // 根据当前图案集使用对应的时序参数
-        const int exposureTime = patternSets[patternSetIndex].exposureTime_;
-        const int preTime = patternSets[patternSetIndex].preExposureTime_;
-        const int postTime = patternSets[patternSetIndex].postExposureTime_;
+        // ===== 单通道配置下的等待时间计算 =====
+        // 所有图案都使用相同的时序参数
+        const int exposureTime = patternSets[0].exposureTime_;
+        const int preTime = patternSets[0].preExposureTime_;
+        const int postTime = patternSets[0].postExposureTime_;
         const int totalTimeMs = (preTime + exposureTime + postTime) / 1000;
         
         // 增加等待时间，确保投影稳定
