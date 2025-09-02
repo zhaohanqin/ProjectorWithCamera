@@ -324,12 +324,14 @@ bool runVerticalProjectStepAndCapture(
     using namespace slmaster::device;
     try {
         // 投影仪
+        std::cout << "[垂直] 正在获取并连接投影仪: " << projectorModel << std::endl;
         slmaster::device::ProjectorFactory factory;
         Projector* projector = factory.getProjector(projectorModel);
         if (!projector || !projector->connect()) {
             std::cerr << u8"垂直条纹：投影仪连接失败" << std::endl;
             return false;
         }
+        std::cout << "[垂直] 投影仪已连接" << std::endl;
 
         // 相机初始化
         MV_CC_DEVICE_INFO_LIST deviceList{};
@@ -399,6 +401,7 @@ bool runVerticalProjectStepAndCapture(
             MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect();
             return false;
         }
+        std::cout << "[垂直] 相机已开始抓流" << std::endl;
 
         // 生成垂直条纹（前N张）
         auto imgs = generatePhaseShiftFringeImages(deviceWidth, deviceHeight, frequency, intensity, offset, noiseStd, steps);
@@ -414,24 +417,32 @@ bool runVerticalProjectStepAndCapture(
         patternSets[0].patternArrayCounts_ = deviceWidth;
         patternSets[0].imgs_.assign(imgs.begin(), imgs.begin() + steps);
 
+        std::cout << "[垂直] 正在装载图案表(垂直方向) ..." << std::endl;
         if (!projector->populatePatternTableData(patternSets)) {
             std::cerr << u8"垂直条纹：装载图案表失败" << std::endl;
             MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle);
             projector->disConnect(); return false;
         }
+        std::cout << "[垂直] 图案表装载完成" << std::endl;
 
         // 按照 ProjectorTest 的稳定流程：停止-断开-重连-重新加载-设LED-开始投影-稳定-停止-再次开始
+        std::cout << "[垂直] 执行稳定流程：停止->断开->重连->重载图案->设LED->开始投影" << std::endl;
         projector->stop();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        projector->disConnect();
+            projector->disConnect();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         if (!projector->connect()) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); return false; }
+        std::cout << "[垂直] 已重新连接投影仪，重新装载图案表..." << std::endl;
         if (!projector->populatePatternTableData(patternSets)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+        std::cout << "[垂直] 设置LED电流为90%" << std::endl;
         projector->setLEDCurrent(0.9, 0.9, 0.9);
+        std::cout << "[垂直] 开始连续投影(project=true)" << std::endl;
         if (!projector->project(true)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        std::cout << "[垂直] 停止连续投影，以确保状态干净" << std::endl;
         projector->stop();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        std::cout << "[垂直] 重新开始连续投影(project=true)" << std::endl;
         if (!projector->project(true)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
         std::this_thread::sleep_for(std::chrono::milliseconds(1500));
 
@@ -439,29 +450,34 @@ bool runVerticalProjectStepAndCapture(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10,
             50
         );
+        std::cout << "[垂直] 步进等待时间(ms): " << waitMs << std::endl;
 
         for (int i = 0; i < steps; ++i) {
+            std::cout << "[垂直] 步进第 " << (i+1) << "/" << steps << " 帧" << std::endl;
             if (!projector->step()) { std::cerr << u8"垂直条纹：步进失败" << std::endl; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
 
             // 触发相机
             std::string triggerCommand = "TriggerSoftware";
             MVCC_ENUMVALUE selector; if (MV_CC_GetEnumValue(cameraHandle, "TriggerSelector", &selector) == MV_OK && selector.nCurValue == 0) triggerCommand = "FrameTriggerSoftware";
+            std::cout << "[垂直] 触发相机指令: " << triggerCommand << std::endl;
             MV_CC_SetCommandValue(cameraHandle, triggerCommand.c_str());
 
             // 等待相机曝光完成
             MVCC_FLOATVALUE curExp; int camWait = 1000; if (MV_CC_GetFloatValue(cameraHandle, "ExposureTime", &curExp) == MV_OK) { camWait = (int)(curExp.fCurValue / 1000.0) + 500; if (camWait > 5000) camWait = 5000; }
+            std::cout << "[垂直] 等待相机完成(ms): " << camWait << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(camWait));
         }
 
+        std::cout << "[垂直] 完成，停止投影并清理资源" << std::endl;
         projector->stop();
-        MV_CC_StopGrabbing(cameraHandle);
-        MV_CC_CloseDevice(cameraHandle);
-        MV_CC_DestroyHandle(cameraHandle);
-        projector->disConnect();
+            MV_CC_StopGrabbing(cameraHandle);
+            MV_CC_CloseDevice(cameraHandle);
+            MV_CC_DestroyHandle(cameraHandle);
+            projector->disConnect();
         return true;
     } catch (...) {
-        return false;
+            return false;
     }
 }
 
@@ -481,9 +497,11 @@ bool runHorizontalProjectStepAndCapture(
 ) {
     using namespace slmaster::device;
     try {
+        std::cout << "[水平] 正在获取并连接投影仪: " << projectorModel << std::endl;
         slmaster::device::ProjectorFactory factory;
         Projector* projector = factory.getProjector(projectorModel);
         if (!projector || !projector->connect()) { std::cerr << u8"水平条纹：投影仪连接失败" << std::endl; return false; }
+        std::cout << "[水平] 投影仪已连接" << std::endl;
 
         // 相机初始化与配置（同上）
         MV_CC_DEVICE_INFO_LIST deviceList{};
@@ -520,6 +538,7 @@ bool runHorizontalProjectStepAndCapture(
         };
         MV_CC_RegisterImageCallBackEx(cameraHandle, ImageCallbackEx, &ctx);
         if (MV_CC_StartGrabbing(cameraHandle) != MV_OK) { MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+        std::cout << "[水平] 相机已开始抓流" << std::endl;
 
         auto imgs = generatePhaseShiftFringeImages(deviceWidth, deviceHeight, frequency, intensity, offset, noiseStd, steps);
         if ((int)imgs.size() != steps * 2) { std::cerr << u8"水平条纹：生成图像失败" << std::endl; }
@@ -534,33 +553,46 @@ bool runHorizontalProjectStepAndCapture(
         patternSets[0].patternArrayCounts_ = deviceWidth;
         patternSets[0].imgs_.assign(imgs.begin() + steps, imgs.end());
 
+        std::cout << "[水平] 正在装载图案表(水平方向) ..." << std::endl;
         if (!projector->populatePatternTableData(patternSets)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+        std::cout << "[水平] 图案表装载完成" << std::endl;
 
         // 按照 ProjectorTest 的稳定流程
+        std::cout << "[水平] 执行稳定流程：停止->断开->重连->重载图案->设LED->开始投影" << std::endl;
         projector->stop();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         projector->disConnect();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         if (!projector->connect()) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); return false; }
+        std::cout << "[水平] 已重新连接投影仪，重新装载图案表..." << std::endl;
         if (!projector->populatePatternTableData(patternSets)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+        std::cout << "[水平] 设置LED电流为90%" << std::endl;
         projector->setLEDCurrent(0.9, 0.9, 0.9);
+        std::cout << "[水平] 开始连续投影(project=true)" << std::endl;
         if (!projector->project(true)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        std::cout << "[水平] 停止连续投影，以确保状态干净" << std::endl;
         projector->stop();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        std::cout << "[水平] 重新开始连续投影(project=true)" << std::endl;
         if (!projector->project(true)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
         std::this_thread::sleep_for(std::chrono::milliseconds(1500));
         int waitMs = std::max((patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10, 50);
+        std::cout << "[水平] 步进等待时间(ms): " << waitMs << std::endl;
 
         for (int i = 0; i < steps; ++i) {
+            std::cout << "[水平] 步进第 " << (i+1) << "/" << steps << " 帧" << std::endl;
             if (!projector->step()) { std::cerr << u8"水平条纹：步进失败" << std::endl; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
             std::string triggerCommand = "TriggerSoftware"; MVCC_ENUMVALUE selector; if (MV_CC_GetEnumValue(cameraHandle, "TriggerSelector", &selector) == MV_OK && selector.nCurValue == 0) triggerCommand = "FrameTriggerSoftware";
+            std::cout << "[水平] 触发相机指令: " << triggerCommand << std::endl;
             MV_CC_SetCommandValue(cameraHandle, triggerCommand.c_str());
             MVCC_FLOATVALUE curExp; int camWait = 1000; if (MV_CC_GetFloatValue(cameraHandle, "ExposureTime", &curExp) == MV_OK) { camWait = (int)(curExp.fCurValue / 1000.0) + 500; if (camWait > 5000) camWait = 5000; }
+            std::cout << "[水平] 等待相机完成(ms): " << camWait << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(camWait));
         }
 
+        std::cout << "[水平] 完成，停止投影并清理资源" << std::endl;
         projector->stop();
         MV_CC_StopGrabbing(cameraHandle);
         MV_CC_CloseDevice(cameraHandle);
@@ -589,8 +621,17 @@ int main() {
     const std::string cameraSerial = "NULL"; // 或者例如 "DA1015150"
     const std::string saveDir = "images";    // 图像保存目录
     
+    /*
+    这里的参数分别是：projectorModel：投影仪型号，deviceWidth：投影宽度，deviceHeight：投影高度，steps：相移步数，frequency：条纹频率，intensity：条纹强度，
+    offset：亮度偏移，noiseStd：噪声标准差，cameraSerial：相机序列号，saveDir：图像保存目录，useSavedParams：是否使用保存的相机参数
+    */
     bool successV = slmaster_demo::runVerticalProjectStepAndCapture(
         "DLP4710", 1920, 1080, 4, 15, 100, 128, 0.0, cameraSerial, saveDir, true);
+
+    /*
+    这里的参数分别是：projectorModel：投影仪型号，deviceWidth：投影宽度，deviceHeight：投影高度，steps：相移步数，frequency：条纹频率，intensity：条纹强度，
+    offset：亮度偏移，noiseStd：噪声标准差，cameraSerial：相机序列号，saveDir：图像保存目录，useSavedParams：是否使用保存的相机参数
+    */
     bool successH = slmaster_demo::runHorizontalProjectStepAndCapture(
         "DLP4710", 1920, 1080, 4, 15, 100, 128, 0.0, cameraSerial, saveDir, true);
 
