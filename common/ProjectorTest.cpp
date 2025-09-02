@@ -1189,9 +1189,7 @@ void runAllTests() {
     testImageGeneration();//测试图像生成函数是否正确生成垂直和水平条纹
     */
     
-    
     // 自动生成条纹测试
-    testProjectorStepWithGeneratedFringes();//拆分为垂直/水平两个单独测试以避免互相影响
     testProjectorStepWithGeneratedVerticalFringes();
     testProjectorStepWithGeneratedHorizontalFringes();
 

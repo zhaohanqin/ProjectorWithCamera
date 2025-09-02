@@ -25,7 +25,11 @@
 #include <cstring>
 #include <cstdio>
 #include <atomic>
+#include <algorithm>
 #if defined(_WIN32)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
 #include <windows.h>
 #endif
 
@@ -302,32 +306,10 @@ static std::vector<cv::Mat> generatePhaseShiftFringeImages(
     return result;
 }
 
-// 演示：投影仪与相机协作（均为"软触发"）
-// 流程：
-// 1) 初始化并选择投影仪；
-// 2) 自动生成 2N 张相移条纹（垂直 N + 水平 N），装载到投影仪；
-// 3) 初始化相机并读取保存的参数配置；
-// 4) 开始投影；循环 2N 次：
-//    - 先软件步进 projector->step() 使投影仪显示下一张图；
-//    - 等待稳定时间；
-//    - 再以软件触发相机采集一帧并保存图像；
-// 5) 全部完成后停止投影并断开连接。
-// 参数说明：
-// - projectorModel：投影仪型号字符串，默认 "DLP4710"；
-// - deviceWidth   ：投影分辨率宽度（需与设备一致，如 1920）；
-// - deviceHeight  ：投影分辨率高度（需与设备一致，如 1080）；
-// - steps         ：相移步数 N；
-// - frequency     ：条纹频率/周期数；
-// - intensity     ：条纹强度/振幅（建议不超过 127）；
-// - offset        ：亮度偏移（建议位于 128 附近以居中）；
-// - noiseStd      ：噪声标准差（0 表示不加噪声）；
-// - cameraSerial  ：相机序列号，"NULL"表示自动选择第一台；
-// - outputDir     ：图像保存目录，为空表示当前目录；
-// - useSavedParams：是否使用保存的相机参数，true表示从文件读取。
-// 返回值：
-// - true 表示流程执行成功；false 表示中途失败。
-bool runProjectorCameraCooperation(
-    const std::string& projectorModel /* = "DLP4710" */,
+
+// ========== 新增：仅垂直条纹的“步进投影 + 软触发采集” ==========
+bool runVerticalProjectStepAndCapture(
+    const std::string& projectorModel,
     int deviceWidth,
     int deviceHeight,
     int steps,
@@ -335,199 +317,94 @@ bool runProjectorCameraCooperation(
     int intensity,
     int offset,
     double noiseStd,
-    const std::string& cameraSerial /* = "NULL" 表示自动选择第一台 */,
-    const std::string& outputDir /* 为空表示当前目录 */,
-    bool useSavedParams /* = true 表示使用保存的相机参数 */
+    const std::string& cameraSerial,
+    const std::string& outputDir,
+    bool useSavedParams
 ) {
     using namespace slmaster::device;
-
     try {
-        // ========== 1) 初始化与选择投影仪 ==========
+        // 投影仪
         slmaster::device::ProjectorFactory factory;
         Projector* projector = factory.getProjector(projectorModel);
-        if (projector == nullptr) {
-            std::cerr << u8"获取投影仪失败，型号: " << projectorModel << std::endl;
+        if (!projector || !projector->connect()) {
+            std::cerr << u8"垂直条纹：投影仪连接失败" << std::endl;
             return false;
         }
-        if (!projector->connect()) {
-            std::cerr << u8"连接投影仪失败" << std::endl;
-            return false;
-        }
-        std::cout << u8"投影仪已连接: " << projectorModel << std::endl;
 
-        // ========== 1.5) 初始化相机（MVS，软触发） ==========
+        // 相机初始化
         MV_CC_DEVICE_INFO_LIST deviceList{};
         int nRet = MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, &deviceList);
         if (nRet != MV_OK || deviceList.nDeviceNum == 0) {
-            std::cerr << u8"未发现可用相机，错误码: " << nRet << std::endl;
+            std::cerr << u8"垂直条纹：未发现可用相机" << std::endl;
             projector->disConnect();
             return false;
         }
-
         MV_CC_DEVICE_INFO* pSelectedDevice = nullptr;
         if (!cameraSerial.empty() && cameraSerial != "NULL") {
             for (unsigned int i = 0; i < deviceList.nDeviceNum; ++i) {
                 MV_CC_DEVICE_INFO* pInfo = deviceList.pDeviceInfo[i];
-                const char* serial = nullptr;
-                // 根据传输层类型选择序列号字段（USB 或 GigE）
-                if (pInfo->nTLayerType == MV_USB_DEVICE) {
-                    serial = (const char*)pInfo->SpecialInfo.stUsb3VInfo.chSerialNumber;
-                } else if (pInfo->nTLayerType == MV_GIGE_DEVICE) {
-                    serial = (const char*)pInfo->SpecialInfo.stGigEInfo.chSerialNumber;
-                }
-                if (serial && cameraSerial == serial) {
-                    pSelectedDevice = pInfo;
-                    break;
-                }
-            }
-            if (pSelectedDevice == nullptr) {
-                std::cerr << u8"未找到匹配序列号的相机，序列号: " << cameraSerial << u8"，将使用第一台设备" << std::endl;
+                const char* serial = (pInfo->nTLayerType == MV_USB_DEVICE)
+                    ? (const char*)pInfo->SpecialInfo.stUsb3VInfo.chSerialNumber
+                    : (const char*)pInfo->SpecialInfo.stGigEInfo.chSerialNumber;
+                if (serial && cameraSerial == serial) { pSelectedDevice = pInfo; break; }
             }
         }
-        if (pSelectedDevice == nullptr) {
-            pSelectedDevice = deviceList.pDeviceInfo[0];
-        }
+        if (!pSelectedDevice) pSelectedDevice = deviceList.pDeviceInfo[0];
         void* cameraHandle = nullptr;
         nRet = MV_CC_CreateHandle(&cameraHandle, pSelectedDevice);
-        if (nRet != MV_OK || cameraHandle == nullptr) {
-            std::cerr << u8"创建相机句柄失败，错误码: " << nRet << std::endl;
+        if (nRet != MV_OK || !cameraHandle) {
+            std::cerr << u8"垂直条纹：创建相机句柄失败" << std::endl;
             projector->disConnect();
             return false;
         }
-
-        nRet = MV_CC_OpenDevice(cameraHandle);
-        if (nRet != MV_OK) {
-            std::cerr << u8"打开相机失败，错误码: " << nRet << std::endl;
+        if (MV_CC_OpenDevice(cameraHandle) != MV_OK) {
+            std::cerr << u8"垂直条纹：打开相机失败" << std::endl;
             MV_CC_DestroyHandle(cameraHandle);
             projector->disConnect();
             return false;
         }
-
-        // 更稳健的触发配置：优先按字符串设置，兼容不同固件枚举
+        // 基础触发配置
         MV_CC_SetEnumValueByString(cameraHandle, "PixelFormat", "Mono8");
         MV_CC_SetEnumValueByString(cameraHandle, "TriggerSelector", "FrameStart");
         MV_CC_SetEnumValue(cameraHandle, "TriggerMode", 1);
         MV_CC_SetEnumValueByString(cameraHandle, "TriggerSource", "Software");
         MV_CC_SetEnumValueByString(cameraHandle, "AcquisitionMode", "Continuous");
 
-        // ========== 相机参数配置：从保存的文件读取或使用默认值 ==========
-        CameraParams cameraParams;
-        if (useSavedParams) {
-            std::cout << "尝试从保存的参数文件读取相机配置..." << std::endl;
-            if (loadCameraParams(cameraParams)) {
-                std::cout << "成功加载保存的相机参数" << std::endl;
-            } else {
-                std::cout << "未找到保存的参数文件，使用默认参数" << std::endl;
-                // 设置默认参数
-                cameraParams.exposureTimeUs = 10000.0f; // 10ms
-                cameraParams.gainValue = 5.0f; // 5dB
-                cameraParams.frameRate = 10.0f; // 10fps
-                cameraParams.exposureAutoMode = false;
-                cameraParams.gainAutoMode = false;
-                cameraParams.triggerDelayUs = 0;
-                cameraParams.enableChunkData = false;
-                cameraParams.printCurrentParams = true;
-            }
-        } else {
-            std::cout << "使用默认相机参数" << std::endl;
-            // 设置默认参数
-            cameraParams.exposureTimeUs = 10000.0f; // 10ms
-            cameraParams.gainValue = 5.0f; // 5dB
-            cameraParams.frameRate = 10.0f; // 10fps
-            cameraParams.exposureAutoMode = false;
-            cameraParams.gainAutoMode = false;
-            cameraParams.triggerDelayUs = 0;
-            cameraParams.enableChunkData = false;
-            cameraParams.printCurrentParams = true;
+        // 相机参数
+        CameraParams params;
+        if (useSavedParams) { loadCameraParams(params); }
+        else {
+            params.exposureTimeUs = 10000.0f; params.gainValue = 5.0f; params.frameRate = 10.0f;
+            params.exposureAutoMode = false; params.gainAutoMode = false; params.triggerDelayUs = 0;
+            params.enableChunkData = false; params.printCurrentParams = true;
         }
+        configureCameraParams(cameraHandle, params);
 
-        // 应用相机参数配置
-        if (!configureCameraParams(cameraHandle, cameraParams)) {
-            std::cerr << "相机参数配置失败" << std::endl;
-            MV_CC_CloseDevice(cameraHandle);
-            MV_CC_DestroyHandle(cameraHandle);
-            projector->disConnect();
-            return false;
-        }
-
-        // 为回调准备上下文（线程安全计数器 + 保存目录 + 总帧数）
-        struct CallbackContext {
-            std::atomic<int> frameIndex{0};
-            int totalFrames{0};
-            std::string saveDir;
-            int stepsPerOrientation{0};
-        } cbCtx;
-        cbCtx.totalFrames = steps * 2;
-        cbCtx.stepsPerOrientation = steps;
-        if (!outputDir.empty()) {
-            cbCtx.saveDir = outputDir;
-        } else {
-            // 默认保存到当前目录下 images 子目录
-            cbCtx.saveDir = (std::filesystem::current_path() / "images").string();
-        }
-        // 确保目录存在
-        try { std::filesystem::create_directories(cbCtx.saveDir); } catch (...) {}
-
-        // 相机的回调：打印帧信息并保存为 I001_V.png / I005_H.png
-        auto ImageCallbackEx = [](unsigned char* pData, MV_FRAME_OUT_INFO_EX* pFrameInfo, void* pUser) {
-			if (!pFrameInfo || !pUser) return;// 安全检查, 避免野指针访问
-            CallbackContext* ctx = reinterpret_cast<CallbackContext*>(pUser);
-            const int idx = 1 + ctx->frameIndex.fetch_add(1); // 从1开始
-            std::cout << "Get One Frame: Width[" << pFrameInfo->nWidth
-                      << "] Height[" << pFrameInfo->nHeight
-                      << "] Index[" << idx << "/" << ctx->totalFrames << "]" << std::endl;
-            // 仅保存前 totalFrames 张，避免多余帧命名越界
-            if (idx <= ctx->totalFrames) {
-                cv::Mat img(pFrameInfo->nHeight, pFrameInfo->nWidth, CV_8UC1, pData);
-                cv::Mat imgCopy = img.clone(); // 复制缓冲，避免回调后内存复用
-                const bool isVertical = idx <= ctx->stepsPerOrientation;
-                const char orient = isVertical ? 'V' : 'H';
-                char nameBuf[32];
-                std::snprintf(nameBuf, sizeof(nameBuf), "I%03d_%c.png", idx, orient);
-                std::string filename = nameBuf;
-                std::string filepath = (std::filesystem::path(ctx->saveDir) / filename).string();
-                try {
-                    cv::imwrite(filepath, imgCopy);
-                } catch (...) {
-                    std::cerr << u8"保存图像失败: " << filepath << std::endl;
-                }
+        // 回调上下文
+        struct CbCtx { std::atomic<int> idx{0}; int total{0}; std::string dir; } ctx;
+        ctx.total = steps; ctx.dir = outputDir.empty() ? (std::filesystem::current_path() / "images").string() : outputDir;
+        try { std::filesystem::create_directories(ctx.dir); } catch (...) {}
+        auto ImageCallbackEx = [](unsigned char* pData, MV_FRAME_OUT_INFO_EX* info, void* p) {
+            if (!pData || !info || !p) return;
+            CbCtx* c = reinterpret_cast<CbCtx*>(p);
+            int idx = 1 + c->idx.fetch_add(1);
+            if (idx <= c->total) {
+                cv::Mat img(info->nHeight, info->nWidth, CV_8UC1, pData);
+                cv::imwrite((std::filesystem::path(c->dir) / ("I" + std::to_string(idx) + "_V.png")).string(), img);
             }
         };
-
-        nRet = MV_CC_RegisterImageCallBackEx(cameraHandle, ImageCallbackEx, &cbCtx);
-        if (nRet != MV_OK) {
-            std::cerr << u8"注册图像回调失败，错误码: " << nRet << std::endl;
-            MV_CC_CloseDevice(cameraHandle);
-            MV_CC_DestroyHandle(cameraHandle);
-            projector->disConnect();
+        MV_CC_RegisterImageCallBackEx(cameraHandle, ImageCallbackEx, &ctx);
+        if (MV_CC_StartGrabbing(cameraHandle) != MV_OK) {
+            std::cerr << u8"垂直条纹：开始采集失败" << std::endl;
+            MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect();
             return false;
         }
 
-        nRet = MV_CC_StartGrabbing(cameraHandle);
-        if (nRet != MV_OK) {
-            std::cerr << u8"开始采集失败，错误码: " << nRet << std::endl;
-            MV_CC_CloseDevice(cameraHandle);
-            MV_CC_DestroyHandle(cameraHandle);
-            projector->disConnect();
-            return false;
-        }
-
-        // ========== 2) 生成相移条纹 ==========
-        auto imgs = generatePhaseShiftFringeImages(deviceWidth, deviceHeight,
-            frequency, intensity, offset, noiseStd, steps);
-        if (static_cast<int>(imgs.size()) != steps * 2) {
-            std::cerr << u8"生成条纹图像数量异常: " << imgs.size() << std::endl;
-            MV_CC_StopGrabbing(cameraHandle);
-            MV_CC_CloseDevice(cameraHandle);
-            MV_CC_DestroyHandle(cameraHandle);
-            projector->disConnect();
-            return false;
-        }
-
-        std::vector<PatternOrderSet> patternSets(2);
-
-        // 垂直条纹配置（前N张）
-        patternSets[0].exposureTime_ = 4000;      // 可按需外部传入
+        // 生成垂直条纹（前N张）
+        auto imgs = generatePhaseShiftFringeImages(deviceWidth, deviceHeight, frequency, intensity, offset, noiseStd, steps);
+        if ((int)imgs.size() != steps * 2) { std::cerr << u8"垂直条纹：生成图像失败" << std::endl; }
+        std::vector<PatternOrderSet> patternSets(1);
+        patternSets[0].exposureTime_ = 4000;
         patternSets[0].preExposureTime_ = 3000;
         patternSets[0].postExposureTime_ = 3000;
         patternSets[0].illumination_ = Blue;
@@ -537,117 +414,160 @@ bool runProjectorCameraCooperation(
         patternSets[0].patternArrayCounts_ = deviceWidth;
         patternSets[0].imgs_.assign(imgs.begin(), imgs.begin() + steps);
 
-        // 水平条纹配置（后N张）
-        patternSets[1].exposureTime_ = 4000;
-        patternSets[1].preExposureTime_ = 3000;
-        patternSets[1].postExposureTime_ = 3000;
-        patternSets[1].illumination_ = Blue;
-        patternSets[1].invertPatterns_ = false;
-        patternSets[1].isVertical_ = false;
-        patternSets[1].isOneBit_ = false;
-        patternSets[1].patternArrayCounts_ = deviceHeight;
-        patternSets[1].imgs_.assign(imgs.begin() + steps, imgs.end());
-
         if (!projector->populatePatternTableData(patternSets)) {
-            std::cerr << u8"装载图案表失败" << std::endl;
-            // 清理相机与投影仪资源
-            MV_CC_StopGrabbing(cameraHandle);
-            MV_CC_CloseDevice(cameraHandle);
-            MV_CC_DestroyHandle(cameraHandle);
-            projector->disConnect();
-            return false;
+            std::cerr << u8"垂直条纹：装载图案表失败" << std::endl;
+            MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle);
+            projector->disConnect(); return false;
         }
 
-        // ========== 3) 开始投影 + 相机协作（软触发顺序：先投影，后采集） ==========
-        // 步进模式启动（与 ProjectorTest 一致），每次 step() 前进一步
-        if (!projector->project(false)) {
-            std::cerr << u8"启动投影（步进模式）失败" << std::endl;
-            MV_CC_StopGrabbing(cameraHandle);
-            MV_CC_CloseDevice(cameraHandle);
-            MV_CC_DestroyHandle(cameraHandle);
-            projector->disConnect();
-            return false;
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        // 按照 ProjectorTest 的稳定流程：停止-断开-重连-重新加载-设LED-开始投影-稳定-停止-再次开始
+        projector->stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        projector->disConnect();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        if (!projector->connect()) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); return false; }
+        if (!projector->populatePatternTableData(patternSets)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+        projector->setLEDCurrent(0.9, 0.9, 0.9);
+        if (!projector->project(true)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        projector->stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        if (!projector->project(true)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
 
-        // 软触发顺序：先步进，按照时序预算等待，再触发相机
-        auto waitMsFromTiming = [&](bool vertical){
-            int pre = vertical ? patternSets[0].preExposureTime_ : patternSets[1].preExposureTime_;
-            int exp = vertical ? patternSets[0].exposureTime_     : patternSets[1].exposureTime_;
-            int post= vertical ? patternSets[0].postExposureTime_ : patternSets[1].postExposureTime_;
-            int ms = (pre + exp + post) / 1000;
-            if (ms < 1) ms = 1;
-            return ms + 10; // 余量
-        };
-        // 按固定次数步进，避免依赖会在跨 PatternSet 重置的设备状态计数
-        for (int i = 0; i < steps * 2; ++i) {
-            std::cout << u8"\n--- 第 " << (i + 1) << u8" 帧 ---" << std::endl;
-            
-            if (!projector->step()) {
-                std::cerr << u8"步进第" << (i + 1) << u8"帧失败" << std::endl;
-                break;
-            }
-            std::cout << u8"投影仪已步进到第 " << (i + 1) << u8" 张图案" << std::endl;
-            
-            const bool isVerticalNow = (i < steps);
-            const int waitMs = waitMsFromTiming(isVerticalNow);
-            std::cout << u8"等待投影稳定: " << waitMs << u8"ms (垂直=" << isVerticalNow << u8")" << std::endl;
+        int waitMs = std::max(
+            (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10,
+            50
+        );
+
+        for (int i = 0; i < steps; ++i) {
+            if (!projector->step()) { std::cerr << u8"垂直条纹：步进失败" << std::endl; break; }
             std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
 
-            // 软触发相机采集
-            std::cout << u8"触发相机采集第 " << (i + 1) << u8" 帧..." << std::endl;
-            
-            // 使用正确的软触发命令
-            std::string triggerCommand;
-            MVCC_ENUMVALUE triggerSelector;
-            nRet = MV_CC_GetEnumValue(cameraHandle, "TriggerSelector", &triggerSelector);
-            if (nRet == MV_OK) {
-                if (triggerSelector.nCurValue == 0) {  // FrameStart
-                    triggerCommand = "FrameTriggerSoftware";
-                } else {
-                    triggerCommand = "TriggerSoftware";  // 用于FrameBurstStart等
-                }
-            } else {
-                triggerCommand = "TriggerSoftware";  // 默认使用
-            }
-            
-            nRet = MV_CC_SetCommandValue(cameraHandle, triggerCommand.c_str());
-            if (nRet != MV_OK) {
-                std::cerr << u8"软触发失败: 0x" << std::hex << nRet << std::dec << std::endl;
-                break;
-            }
-            
-            // 等待相机采集完成（根据曝光时间动态调整）
-            MVCC_FLOATVALUE currentExposure;
-            int waitTimeMs = 1000; // 默认等待1秒
-            if (MV_CC_GetFloatValue(cameraHandle, "ExposureTime", &currentExposure) == MV_OK) {
-                // 等待时间 = 曝光时间 + 额外缓冲时间（500ms）
-                waitTimeMs = static_cast<int>(static_cast<double>(currentExposure.fCurValue) / 1000.0) + 500;
-                // 限制最大等待时间为5秒，避免等待过久
-                if (waitTimeMs > 5000) waitTimeMs = 5000;
-            }
-            std::cout << u8"等待相机采集完成: " << waitTimeMs << u8"ms" << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
-            
-            std::cout << u8"第 " << (i + 1) << u8" 帧采集完成" << std::endl;
+            // 触发相机
+            std::string triggerCommand = "TriggerSoftware";
+            MVCC_ENUMVALUE selector; if (MV_CC_GetEnumValue(cameraHandle, "TriggerSelector", &selector) == MV_OK && selector.nCurValue == 0) triggerCommand = "FrameTriggerSoftware";
+            MV_CC_SetCommandValue(cameraHandle, triggerCommand.c_str());
+
+            // 等待相机曝光完成
+            MVCC_FLOATVALUE curExp; int camWait = 1000; if (MV_CC_GetFloatValue(cameraHandle, "ExposureTime", &curExp) == MV_OK) { camWait = (int)(curExp.fCurValue / 1000.0) + 500; if (camWait > 5000) camWait = 5000; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(camWait));
         }
 
-		// ========== 4) 全部完成，停止投影与断开连接 ==========
-        if (!projector->stop()) {
-            std::cerr << u8"停止投影失败" << std::endl;
-        }
-        // 关闭相机
+        projector->stop();
         MV_CC_StopGrabbing(cameraHandle);
         MV_CC_CloseDevice(cameraHandle);
         MV_CC_DestroyHandle(cameraHandle);
         projector->disConnect();
-        std::cout << u8"投影与相机协作流程完成" << std::endl;
         return true;
-    }
-    catch (const std::exception& e) {
-        std::cerr << "异常: " << e.what() << std::endl;
+    } catch (...) {
         return false;
     }
+}
+
+// ========== 新增：仅水平条纹的“步进投影 + 软触发采集” ==========
+bool runHorizontalProjectStepAndCapture(
+    const std::string& projectorModel,
+    int deviceWidth,
+    int deviceHeight,
+    int steps,
+    int frequency,
+    int intensity,
+    int offset,
+    double noiseStd,
+    const std::string& cameraSerial,
+    const std::string& outputDir,
+    bool useSavedParams
+) {
+    using namespace slmaster::device;
+    try {
+        slmaster::device::ProjectorFactory factory;
+        Projector* projector = factory.getProjector(projectorModel);
+        if (!projector || !projector->connect()) { std::cerr << u8"水平条纹：投影仪连接失败" << std::endl; return false; }
+
+        // 相机初始化与配置（同上）
+        MV_CC_DEVICE_INFO_LIST deviceList{};
+        int nRet = MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, &deviceList);
+        if (nRet != MV_OK || deviceList.nDeviceNum == 0) { projector->disConnect(); return false; }
+        MV_CC_DEVICE_INFO* pSelectedDevice = deviceList.pDeviceInfo[0];
+        if (!cameraSerial.empty() && cameraSerial != "NULL") {
+            for (unsigned int i = 0; i < deviceList.nDeviceNum; ++i) {
+                MV_CC_DEVICE_INFO* pInfo = deviceList.pDeviceInfo[i];
+                const char* serial = (pInfo->nTLayerType == MV_USB_DEVICE)
+                    ? (const char*)pInfo->SpecialInfo.stUsb3VInfo.chSerialNumber
+                    : (const char*)pInfo->SpecialInfo.stGigEInfo.chSerialNumber;
+                if (serial && cameraSerial == serial) { pSelectedDevice = pInfo; break; }
+            }
+        }
+        void* cameraHandle = nullptr;
+        if (MV_CC_CreateHandle(&cameraHandle, pSelectedDevice) != MV_OK || !cameraHandle) { projector->disConnect(); return false; }
+        if (MV_CC_OpenDevice(cameraHandle) != MV_OK) { MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+        MV_CC_SetEnumValueByString(cameraHandle, "PixelFormat", "Mono8");
+        MV_CC_SetEnumValueByString(cameraHandle, "TriggerSelector", "FrameStart");
+        MV_CC_SetEnumValue(cameraHandle, "TriggerMode", 1);
+        MV_CC_SetEnumValueByString(cameraHandle, "TriggerSource", "Software");
+        MV_CC_SetEnumValueByString(cameraHandle, "AcquisitionMode", "Continuous");
+
+        CameraParams params; if (useSavedParams) loadCameraParams(params); else { params.exposureTimeUs = 10000.0f; params.gainValue = 5.0f; params.frameRate = 10.0f; params.exposureAutoMode=false; params.gainAutoMode=false; params.triggerDelayUs=0; params.enableChunkData=false; params.printCurrentParams=true; }
+        configureCameraParams(cameraHandle, params);
+
+        struct CbCtx { std::atomic<int> idx{0}; int total{0}; std::string dir; } ctx;
+        ctx.total = steps; ctx.dir = outputDir.empty() ? (std::filesystem::current_path() / "images").string() : outputDir;
+        try { std::filesystem::create_directories(ctx.dir); } catch (...) {}
+        auto ImageCallbackEx = [](unsigned char* pData, MV_FRAME_OUT_INFO_EX* info, void* p) {
+            if (!pData || !info || !p) return; CbCtx* c = reinterpret_cast<CbCtx*>(p);
+            int idx = 1 + c->idx.fetch_add(1); if (idx <= c->total) { cv::Mat img(info->nHeight, info->nWidth, CV_8UC1, pData); cv::imwrite((std::filesystem::path(c->dir) / ("I" + std::to_string(idx) + "_H.png")).string(), img); }
+        };
+        MV_CC_RegisterImageCallBackEx(cameraHandle, ImageCallbackEx, &ctx);
+        if (MV_CC_StartGrabbing(cameraHandle) != MV_OK) { MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+
+        auto imgs = generatePhaseShiftFringeImages(deviceWidth, deviceHeight, frequency, intensity, offset, noiseStd, steps);
+        if ((int)imgs.size() != steps * 2) { std::cerr << u8"水平条纹：生成图像失败" << std::endl; }
+        std::vector<PatternOrderSet> patternSets(1);
+        patternSets[0].exposureTime_ = 4000;
+        patternSets[0].preExposureTime_ = 3000;
+        patternSets[0].postExposureTime_ = 3000;
+        patternSets[0].illumination_ = Blue;
+        patternSets[0].invertPatterns_ = false;
+        patternSets[0].isVertical_ = false;
+        patternSets[0].isOneBit_ = false;
+        patternSets[0].patternArrayCounts_ = deviceWidth;
+        patternSets[0].imgs_.assign(imgs.begin() + steps, imgs.end());
+
+        if (!projector->populatePatternTableData(patternSets)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+
+        // 按照 ProjectorTest 的稳定流程
+        projector->stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        projector->disConnect();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        if (!projector->connect()) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); return false; }
+        if (!projector->populatePatternTableData(patternSets)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+        projector->setLEDCurrent(0.9, 0.9, 0.9);
+        if (!projector->project(true)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        projector->stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        if (!projector->project(true)) { MV_CC_StopGrabbing(cameraHandle); MV_CC_CloseDevice(cameraHandle); MV_CC_DestroyHandle(cameraHandle); projector->disConnect(); return false; }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        int waitMs = std::max((patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10, 50);
+
+        for (int i = 0; i < steps; ++i) {
+            if (!projector->step()) { std::cerr << u8"水平条纹：步进失败" << std::endl; break; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
+            std::string triggerCommand = "TriggerSoftware"; MVCC_ENUMVALUE selector; if (MV_CC_GetEnumValue(cameraHandle, "TriggerSelector", &selector) == MV_OK && selector.nCurValue == 0) triggerCommand = "FrameTriggerSoftware";
+            MV_CC_SetCommandValue(cameraHandle, triggerCommand.c_str());
+            MVCC_FLOATVALUE curExp; int camWait = 1000; if (MV_CC_GetFloatValue(cameraHandle, "ExposureTime", &curExp) == MV_OK) { camWait = (int)(curExp.fCurValue / 1000.0) + 500; if (camWait > 5000) camWait = 5000; }
+            std::this_thread::sleep_for(std::chrono::milliseconds(camWait));
+        }
+
+        projector->stop();
+        MV_CC_StopGrabbing(cameraHandle);
+        MV_CC_CloseDevice(cameraHandle);
+        MV_CC_DestroyHandle(cameraHandle);
+        projector->disConnect();
+        return true;
+    } catch (...) { return false; }
 }
 
 } // namespace slmaster_demo
@@ -669,28 +589,19 @@ int main() {
     const std::string cameraSerial = "NULL"; // 或者例如 "DA1015150"
     const std::string saveDir = "images";    // 图像保存目录
     
-    bool success = slmaster_demo::runProjectorCameraCooperation(
-        "DLP4710",      // 投影仪型号
-        1920,           // 投影宽度
-        1080,           // 投影高度
-        4,              // 相移步数
-        32,             // 条纹频率
-        100,            // 条纹强度
-        128,            // 亮度偏移
-        0.0,            // 噪声标准差
-        cameraSerial,   // 相机序列号
-        saveDir,        // 图像保存目录
-        true            // 使用保存的相机参数
-    );
+    bool successV = slmaster_demo::runVerticalProjectStepAndCapture(
+        "DLP4710", 1920, 1080, 4, 15, 100, 128, 0.0, cameraSerial, saveDir, true);
+    bool successH = slmaster_demo::runHorizontalProjectStepAndCapture(
+        "DLP4710", 1920, 1080, 4, 15, 100, 128, 0.0, cameraSerial, saveDir, true);
 
-    if (success) {
+    if (successV && successH) {
         std::cout << u8"投影仪与相机协作演示完成！" << std::endl;
         std::cout << u8"图像已保存到 " << saveDir << u8" 目录" << std::endl;
     } else {
         std::cerr << u8"投影仪与相机协作演示失败！" << std::endl;
     }
 
-    return success ? 0 : 1;
+    return (successV && successH) ? 0 : 1;
 }
 
 
