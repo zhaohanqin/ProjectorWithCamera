@@ -1,197 +1,95 @@
-# ProjectorWithCamera.cpp 使用说明
+# 项目使用说明（基于当前架构）
 
-## 功能概述
+## 一、项目结构与可执行程序
 
-`ProjectorWithCamera.cpp` 是一个完整的投影仪与相机协作演示程序，实现了以下核心功能：
+当前 CMake 生成以下可执行程序（目标名称）：
+- projectorTest：功能测试集合（连接/投影/步进/自动生成条纹等）
+- cameraTest：相机连接、参数保存与验证
+- projectorWithCreame：投影仪与相机的完整协作示例（自动生成条纹 + 步进 + 采集保存）
+- Projector_Crmera_test：单张图案投影与相机功能集合（全白投影拍照、实时预览调参等）
 
-1. **自动生成相移条纹图像**：根据参数自动生成垂直和水平方向的相移条纹
-2. **投影仪控制**：连接投影仪并加载生成的条纹图像
-3. **相机参数管理**：从保存的配置文件中读取相机参数
-4. **同步协作**：实现投影仪投影与相机采集的精确同步
-5. **图像保存**：自动保存采集的图像到指定目录
+核心库/模块：
+- module/projector_dlpc_api（投影仪底层控制，已在 CMake 中链接）
+- OpenCV（图像处理/显示/保存）
+- 海康 MVS SDK（`Includes/`、`Libraries/win64/`）
 
-## 主要特性
+参数文件：
+- camera_params.txt（位于构建输出目录，cameraTest/ProjectorWithCamera/Projector_Crmera_test 均读取/写入）
 
-### 1. 自动生成条纹图像
-- 基于 `ProjectorTest.cpp` 中的 `generatePhaseShiftFringeImages` 函数
-- 支持自定义条纹频率、强度、偏移等参数
-- 生成垂直和水平两个方向的相移条纹
-- 图像格式：CV_8UC1 灰度图，分辨率与投影仪一致
+## 二、依赖与编译
 
-### 2. 相机参数集成
-- 从 `CameraTest.cpp` 保存的参数文件读取配置
-- 支持曝光时间、增益、帧率、触发延时等参数
-- 自动参数验证和范围检查
-- 参数文件不存在时使用默认值
+1) 确保依赖路径正确（见根 `CMakeLists.txt`）：
+- OpenCV_DIR 指向 OpenCV cmake 安装目录
+- MVS_INCLUDES_DIR 与 MVS_LIBRARIES_DIR 指向海康 SDK 头文件与库目录
 
-### 3. 完整的协作流程
-```
-投影仪连接 → 相机连接 → 参数配置 → 条纹生成 → 图像加载 → 
-投影开始 → 循环：步进投影 → 等待稳定 → 触发采集 → 保存图像 → 
-停止投影 → 断开连接
-```
+2) 使用 CMake 生成并编译（VS/MSVC）：
+- 生成后，`cyusbserial.dll` 会被自动复制到可执行目录
+- VS 调试路径中已附加 dlpc 的第三方 DLL 目录
 
-## 函数接口
+## 三、camera_params.txt 格式
 
-### 主函数：runProjectorCameraCooperation
-
-```cpp
-bool runProjectorCameraCooperation(
-    const std::string& projectorModel,    // 投影仪型号，默认 "DLP4710"
-    int deviceWidth,                      // 投影宽度，如 1920
-    int deviceHeight,                     // 投影高度，如 1080
-    int steps,                           // 相移步数，通常为 4
-    int frequency,                       // 条纹频率/周期数
-    int intensity,                       // 条纹强度/振幅
-    int offset,                          // 亮度偏移
-    double noiseStd,                     // 噪声标准差
-    const std::string& cameraSerial,     // 相机序列号，"NULL"表示自动选择
-    const std::string& outputDir,        // 图像保存目录
-    bool useSavedParams                  // 是否使用保存的相机参数
-);
-```
-
-### 参数说明
-
-#### 投影仪参数
-- **projectorModel**: 投影仪型号，支持 "DLP4710"、"DLP3010" 等
-- **deviceWidth/Height**: 投影分辨率，必须与设备实际分辨率一致
-- **steps**: 相移步数，通常为 4（生成 8 张图像：4 张垂直 + 4 张水平）
-- **frequency**: 条纹频率，控制条纹密度
-- **intensity**: 条纹强度，建议不超过 127
-- **offset**: 亮度偏移，建议设置为 128 附近
-- **noiseStd**: 噪声标准差，0 表示无噪声
-
-#### 相机参数
-- **cameraSerial**: 相机序列号，"NULL" 表示自动选择第一台可用相机
-- **outputDir**: 图像保存目录，为空时使用当前目录下的 "images" 文件夹
-- **useSavedParams**: 是否使用保存的相机参数，true 表示从 `camera_params.txt` 读取
-
-## 使用流程
-
-### 1. 准备工作
-1. 确保投影仪和相机已正确连接
-2. 运行 `CameraTest.cpp` 配置并保存相机参数（可选）
-3. 编译并运行 `ProjectorWithCamera.cpp`
-
-### 2. 参数配置
-程序会自动：
-- 检测并连接投影仪和相机
-- 读取保存的相机参数（如果存在）
-- 生成相移条纹图像
-- 配置投影仪和相机参数
-
-### 3. 执行协作
-程序会按以下顺序执行：
-1. 投影仪步进到第一张图像
-2. 等待投影稳定
-3. 触发相机采集
-4. 保存图像
-5. 重复步骤 1-4，直到所有图像采集完成
-
-### 4. 结果输出
-- 图像保存到指定目录，命名为 `I1.png`, `I2.png`, ..., `I8.png`
-- 控制台输出详细的执行状态和进度信息
-
-## 相机参数文件格式
-
-程序会读取 `camera_params.txt` 文件，格式如下：
-
-```
-# 相机参数配置文件
-# 格式: 参数名=值
-# 注释行以#开头
-
-exposureTimeUs=10000.0
-exposureAutoMode=0
-gainValue=5.0
-gainAutoMode=0
-frameRate=10.0
-triggerDelayUs=0
+```ini
+# 相机参数配置文件（键=值）
+exposureTimeUs=10000.0       # 曝光时间（微秒）
+exposureAutoMode=0           # 0=关闭，1=自动
+gainValue=5.0                # 增益
+gainAutoMode=0               # 0=关闭，1=自动
+frameRate=10.0               # 帧率（fps）
+triggerDelayUs=0             # 触发延时（微秒）
 enableChunkData=0
 printCurrentParams=1
 ```
 
-## 时序控制
+cameraTest、ProjectorWithCamera、Projector_Crmera_test 都会读取/应用该文件；其中 Projector_Crmera_test 还能在实时预览中保存新参数。
 
-### 投影稳定时间
-- 根据投影仪的曝光时间、预曝光时间、后曝光时间计算
-- 最少等待 1.5 秒确保投影稳定
-- 动态调整等待时间以适应不同参数
+## 四、各可执行的用途与使用
 
-### 相机采集时间
-- 根据相机曝光时间动态计算等待时间
-- 等待时间 = 曝光时间 + 500ms 缓冲时间
-- 最大等待时间限制为 5 秒
+### 1) projectorTest
+- 覆盖：连接、断开、project/pause/stop/step、LED 设置、自动生成条纹、按键步进等
+- 默认注释/启用不同测试用例，按需在源文件中切换
 
-## 错误处理
+### 2) cameraTest
+- 连接相机、设置参数、保存到 `camera_params.txt`
+- 运行后生成/更新参数文件，供其它程序使用
 
-程序包含完善的错误处理机制：
+### 3) projectorWithCreame（完整协作示例）
+- 自动生成 N 步相移条纹（垂直 N + 水平 N）
+- 流程：投影仪加载 → 连续/步进控制 → 每步触发相机采集 → 保存图像到 `images/`
+- 参数从 `camera_params.txt` 读取，可选择是否使用保存参数
 
-1. **设备连接失败**：检查设备连接状态，输出详细错误信息
-2. **参数配置失败**：验证参数范围，使用默认值或报错
-3. **图像生成失败**：检查参数有效性，确保图像数量正确
-4. **投影控制失败**：检查投影仪状态，及时停止并清理资源
-5. **相机采集失败**：检查相机状态，输出错误码信息
+### 4) Projector_Crmera_test（单张图案 + 实时调参）
 
-## 示例用法
+提供菜单选择以下功能：
+- 1 全白投影 + 单次拍照保存（保存到 `images/white_capture.png`）
+- 2 投影单张全白 → 启动相机实时预览（可调参并保存到 `camera_params.txt`）
+- 3 投影单张垂直条纹 → 启动相机实时预览（同上）
 
-### 基本用法
-```cpp
-bool success = slmaster_demo::runProjectorCameraCooperation(
-    "DLP4710",      // 投影仪型号
-    1920,           // 投影宽度
-    1080,           // 投影高度
-    4,              // 相移步数
-    32,             // 条纹频率
-    100,            // 条纹强度
-    128,            // 亮度偏移
-    0.0,            // 噪声标准差
-    "NULL",         // 自动选择相机
-    "images",       // 保存目录
-    true            // 使用保存的参数
-);
-```
+投影逻辑（与测试一致）：
+- 非连续步进模式 `project(false)` + `step()`，随后 `pause()` 保持稳定，避免停留频闪
 
-### 自定义参数
-```cpp
-bool success = slmaster_demo::runProjectorCameraCooperation(
-    "DLP3010",      // 使用 DLP3010 投影仪
-    1280,           // 1280x720 分辨率
-    720,
-    4,              // 4 步相移
-    16,             // 较低频率条纹
-    80,             // 较低强度
-    128,            // 标准偏移
-    0.0,            // 无噪声
-    "DA1015150",    // 指定相机序列号
-    "capture_data", // 自定义保存目录
-    false           // 不使用保存的参数
-);
-```
+实时预览窗口：
+- 尺寸：1080×720（缩放显示）
+- 左上角叠加当前参数：曝光(us)/增益/帧率/触发延时
+- 调参热键：
+  - q/ESC：退出
+  - s：保存当前参数到 `camera_params.txt`
+  - +/-：曝光 ±5556us
+  - g/G：增益 ±1
+  - f/F：帧率 ±1 fps（下限 1）
+  - t/T：触发延时 ±100us（下限 0）
 
-## 注意事项
+## 五、常见问题与建议
 
-1. **分辨率匹配**：确保投影仪分辨率参数与实际设备一致
-2. **相机参数**：建议先运行 `CameraTest.cpp` 配置最佳参数
-3. **时序控制**：程序已优化时序，但可根据实际需求调整等待时间
-4. **资源管理**：程序会自动清理资源，异常退出时也会正确断开连接
-5. **图像质量**：确保投影仪和相机之间的同步，避免运动模糊
+- 分辨率匹配：加载到投影仪的图像必须与 DMD 分辨率一致（如 DLP4710 为 1920×1080）
+- 灰度格式：建议使用 CV_8UC1 灰度图；若使用 1bit 模式需自行二值化并设置 `isOneBit_`
+- 稳定显示：需要停留时使用步进+暂停，避免连续模式下可见频闪
+- LED 亮度：用 `setLEDCurrent(r,g,b)` 控制；全白建议三色一致
+- MVS 触发：实时预览使用连续采集（TriggerMode=Off）；单次拍照使用软件触发
 
-## 故障排除
+## 六、快速上手
 
-### 常见问题
-1. **投影仪连接失败**：检查 USB 连接和驱动安装
-2. **相机连接失败**：检查相机连接和 SDK 安装
-3. **参数配置失败**：检查参数文件格式和参数范围
-4. **图像采集失败**：检查相机触发模式和曝光时间设置
-5. **同步问题**：调整等待时间和触发延时参数
+1) 运行 cameraTest 生成 `camera_params.txt`
+2) 运行 Projector_Crmera_test → 菜单 2 或 3，开启实时预览并调参 → 按 s 保存
+3) 运行 projectorWithCreame 进行完整步进协作与采集
 
-### 调试建议
-1. 启用详细日志输出
-2. 检查设备状态和参数范围
-3. 验证图像生成和加载过程
-4. 测试单个设备的独立功能
-5. 逐步调试协作流程
-
-这个程序提供了一个完整的投影仪与相机协作解决方案，集成了自动图像生成、参数管理和同步控制功能，适用于结构光投影、3D 重建等应用场景。
+本说明覆盖当前项目的实际可执行与功能入口，若需扩展其它投影图案或更复杂时序，可参考 `projectorTest` 与 `projectorWithCreame` 的实现方式进行复用与改造。

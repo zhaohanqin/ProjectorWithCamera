@@ -837,24 +837,15 @@ void testProjectorStepWithGeneratedVerticalFringes() {
     assertTrue(isSucess, "重新加载图案数据成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
 
-    // 设置LED并进入投影模式
+    // 设置LED并进入非连续（步进）投影模式，避免停留时自动循环造成可见频闪
     isSucess = projectorDlpcApi->setLEDCurrent(0.9, 0.9, 0.9);
     assertTrue(isSucess, "LED亮度设置成功");
-    std::cout << "开始连续投影模式..." << std::endl;
-    isSucess = projectorDlpcApi->project(true);
-    assertTrue(isSucess, "连续投影模式开始成功");
+    std::cout << "进入非连续步进投影模式..." << std::endl;
+    isSucess = projectorDlpcApi->project(false);
+    assertTrue(isSucess, "非连续步进模式开始成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-
-    // 停止并重新开始，作为最终校验
-    std::cout << "停止当前投影..." << std::endl;
-    projectorDlpcApi->stop();
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    std::cout << "重新开始投影模式..." << std::endl;
-    isSucess = projectorDlpcApi->project(true);
-    assertTrue(isSucess, "投影模式重新开始成功");
-    if (!isSucess) { projectorDlpcApi->disConnect(); return; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    // 确保处于暂停态（某些固件需要显式暂停以保证停留稳定不闪烁）
+    projectorDlpcApi->pause();
 
     const int totalFrames = steps;
     std::cout << "开始步进投影垂直条纹，总共 " << totalFrames << " 帧..." << std::endl;
@@ -1143,30 +1134,10 @@ void testProjectorStepWithGeneratedVerticalFringesKeyTrigger() {
             }
         }
 
-        // 1) 先步进投影仪
-        isSucess = projectorDlpcApi->step();
-        assertTrue(isSucess, "步进第" + std::to_string(i + 1) + "步（垂直）");
-        if (!isSucess) {
-            std::cout << "步进失败，停止测试" << std::endl;
-            break;
-        }
+        // 确保停留稳定
+        projectorDlpcApi->pause();
 
-        // 2) 等待投影稳定
-        const int exposureTime = patternSets[0].exposureTime_;
-        const int preTime = patternSets[0].preExposureTime_;
-        const int postTime = patternSets[0].postExposureTime_;
-        const int totalTimeMs = (preTime + exposureTime + postTime) / 1000;
-        const int waitTimeMs = std::max(totalTimeMs + 500, 1500);
-        std::cout << "等待投影稳定 " << waitTimeMs << "ms..." << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
-
-        // 3) 显示当前图案（垂直）
-        if (i < static_cast<int>(imgs.size())) {
-            cv::namedWindow("ProjectorPreview", cv::WINDOW_NORMAL);
-            cv::imshow("ProjectorPreview", imgs[i]);
-        }
-
-        // 4) 等待用户按键：空格->下一步；ESC->退出
+        // 等待用户按键：空格->步进到下一帧；ESC->退出
         while (true) {
             int key = cv::waitKeyEx(-1);
             if (key == 27) { // ESC
@@ -1176,6 +1147,28 @@ void testProjectorStepWithGeneratedVerticalFringesKeyTrigger() {
                 return;
             }
             if (key == 32) { // 空格
+                // 1) 触发一步
+                isSucess = projectorDlpcApi->step();
+                assertTrue(isSucess, "步进第" + std::to_string(i + 1) + "步（垂直）");
+                if (!isSucess) {
+                    std::cout << "步进失败，停止测试" << std::endl;
+                    return;
+                }
+                // 2) 等待投影稳定
+                const int exposureTime = patternSets[0].exposureTime_;
+                const int preTime = patternSets[0].preExposureTime_;
+                const int postTime = patternSets[0].postExposureTime_;
+                const int totalTimeMs = (preTime + exposureTime + postTime) / 1000;
+                const int waitTimeMs = std::max(totalTimeMs + 500, 1500);
+                std::cout << "等待投影稳定 " << waitTimeMs << "ms..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
+                // 3) 预览当前帧
+                if (i < static_cast<int>(imgs.size())) {
+                    cv::namedWindow("ProjectorPreview", cv::WINDOW_NORMAL);
+                    cv::imshow("ProjectorPreview", imgs[i]);
+                }
+                // 4) 回到暂停态，避免设备继续自动循环
+                projectorDlpcApi->pause();
                 break;
             }
             // 其他按键忽略，继续等待
@@ -1271,24 +1264,15 @@ void testProjectorStepWithGeneratedHorizontalFringesKeyTrigger() {
     assertTrue(isSucess, "重新加载图案数据成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
 
-    // 设置LED并进入投影模式
+    // 设置LED并进入非连续（步进）投影模式，避免停留时自动循环造成可见频闪
     isSucess = projectorDlpcApi->setLEDCurrent(0.9, 0.9, 0.9);
     assertTrue(isSucess, "LED亮度设置成功");
-    std::cout << "开始连续投影模式..." << std::endl;
-    isSucess = projectorDlpcApi->project(true);
-    assertTrue(isSucess, "连续投影模式开始成功");
+    std::cout << "进入非连续步进投影模式..." << std::endl;
+    isSucess = projectorDlpcApi->project(false);
+    assertTrue(isSucess, "非连续步进模式开始成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-
-    // 停止并重新开始，作为最终校验
-    std::cout << "停止当前投影..." << std::endl;
-    projectorDlpcApi->stop();
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    std::cout << "重新开始投影模式..." << std::endl;
-    isSucess = projectorDlpcApi->project(true);
-    assertTrue(isSucess, "投影模式重新开始成功");
-    if (!isSucess) { projectorDlpcApi->disConnect(); return; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    // 确保处于暂停态
+    projectorDlpcApi->pause();
 
     const int totalFrames = steps;
     std::cout << "开始按键触发步进投影水平条纹，总共 " << totalFrames << " 帧..." << std::endl;
@@ -1311,30 +1295,10 @@ void testProjectorStepWithGeneratedHorizontalFringesKeyTrigger() {
             }
         }
 
-        // 1) 先步进投影仪
-        isSucess = projectorDlpcApi->step();
-        assertTrue(isSucess, "步进第" + std::to_string(i + 1) + "步（水平）");
-        if (!isSucess) {
-            std::cout << "步进失败，停止测试" << std::endl;
-            break;
-        }
+        // 确保停留稳定
+        projectorDlpcApi->pause();
 
-        // 2) 等待投影稳定
-        const int exposureTime = patternSets[0].exposureTime_;
-        const int preTime = patternSets[0].preExposureTime_;
-        const int postTime = patternSets[0].postExposureTime_;
-        const int totalTimeMs = (preTime + exposureTime + postTime) / 1000;
-        const int waitTimeMs = std::max(totalTimeMs + 500, 1500);
-        std::cout << "等待投影稳定 " << waitTimeMs << "ms..." << std::endl;
-        std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
-
-        // 3) 显示当前图案（水平）
-        if (i < static_cast<int>(imgs.size())) {
-            cv::namedWindow("ProjectorPreview", cv::WINDOW_NORMAL);
-            cv::imshow("ProjectorPreview", imgs[i]);
-        }
-
-        // 4) 等待用户按键：空格->下一步；ESC->退出
+        // 等待用户按键：空格->步进到下一帧；ESC->退出
         while (true) {
             int key = cv::waitKeyEx(-1);
             if (key == 27) { // ESC
@@ -1344,6 +1308,28 @@ void testProjectorStepWithGeneratedHorizontalFringesKeyTrigger() {
                 return;
             }
             if (key == 32) { // 空格
+                // 1) 触发一步
+                isSucess = projectorDlpcApi->step();
+                assertTrue(isSucess, "步进第" + std::to_string(i + 1) + "步（水平）");
+                if (!isSucess) {
+                    std::cout << "步进失败，停止测试" << std::endl;
+                    return;
+                }
+                // 2) 等待投影稳定
+                const int exposureTime = patternSets[0].exposureTime_;
+                const int preTime = patternSets[0].preExposureTime_;
+                const int postTime = patternSets[0].postExposureTime_;
+                const int totalTimeMs = (preTime + exposureTime + postTime) / 1000;
+                const int waitTimeMs = std::max(totalTimeMs + 500, 1500);
+                std::cout << "等待投影稳定 " << waitTimeMs << "ms..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
+                // 3) 预览当前帧
+                if (i < static_cast<int>(imgs.size())) {
+                    cv::namedWindow("ProjectorPreview", cv::WINDOW_NORMAL);
+                    cv::imshow("ProjectorPreview", imgs[i]);
+                }
+                // 4) 回到暂停态
+                projectorDlpcApi->pause();
                 break;
             }
             // 其他按键忽略，继续等待

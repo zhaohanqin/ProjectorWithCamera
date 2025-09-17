@@ -112,6 +112,39 @@ if (MSVC)
     target_compile_options(cameraTest PRIVATE /utf-8)
 endif()
 
+# 创建第四个可执行文件：Projector_Crmera_test.cpp（全白投影+相机拍照保存）
+add_executable(Projector_Crmera_test ${CMAKE_CURRENT_SOURCE_DIR}/common/Projector_Crmera_test.cpp)
+
+target_include_directories(Projector_Crmera_test PRIVATE 
+    ${CMAKE_CURRENT_SOURCE_DIR}/common 
+    ${CMAKE_CURRENT_SOURCE_DIR}/module/projector_dlpc_api/include
+    ${MVS_INCLUDES_DIR}
+)
+
+target_link_libraries(Projector_Crmera_test 
+    projectorDlpcApi
+    ${OpenCV_LIBRARIES}
+    ${MVS_CAMERA_CONTROL_LIB}
+)
+
+target_compile_features(Projector_Crmera_test PRIVATE cxx_std_17)
+if (MSVC)
+    target_compile_options(Projector_Crmera_test PRIVATE /utf-8)
+endif()
+
+# 复制DLL
+add_custom_command(TARGET Projector_Crmera_test POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+    ${CMAKE_CURRENT_SOURCE_DIR}/module/projector_dlpc_api/third_party/cyusbserial/cyusbserial.dll
+    $<TARGET_FILE_DIR:Projector_Crmera_test>
+    COMMENT "Copying cyusbserial.dll to output directory"
+)
+
+# VS 调试器 PATH 设置
+set_target_properties(Projector_Crmera_test PROPERTIES
+    VS_DEBUGGER_ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/module/projector_dlpc_api/third_party/cyusbserial;$ENV{PATH}"
+)
+
 # 设置C++标准
 target_compile_features(projectorWithCreame PRIVATE cxx_std_17)
 if (MSVC)
@@ -156,5 +189,5 @@ set_target_properties(cameraTest PROPERTIES
 )
 
 # ==================== 设置默认启动项目 ====================
-# 设置cameraTest为默认启动项目（可按需切换）
-set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT cameraTest)
+# 设置 Projector_Crmera_test 为默认启动项目（可按需切换）
+set_property(DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR} PROPERTY VS_STARTUP_PROJECT Projector_Crmera_test)
