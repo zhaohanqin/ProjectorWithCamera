@@ -135,89 +135,50 @@ static bool loadCameraParams(CameraParams& params, const std::string& filename =
     }
 }
 
-// 配置相机参数（与CameraTest.cpp保持一致）
+// 配置相机参数（静默模式，减少输出）
 static bool configureCameraParams(void* handle, const CameraParams& params) {
-    std::cout << "\n=== 配置相机参数 ===" << std::endl;
-    
     // 1. 配置曝光参数
     if (params.exposureTimeUs > 0) {
-        std::cout << "设置曝光时间: " << params.exposureTimeUs << " μs" << std::endl;
         int nRet = MV_CC_SetFloatValue(handle, "ExposureTime", params.exposureTimeUs);
         if (nRet != MV_OK) {
             std::cerr << "设置曝光时间失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
             return false;
         }
-        std::cout << "曝光时间设置成功" << std::endl;
     }
     
     // 2. 配置自动曝光模式
     if (params.exposureAutoMode) {
-        std::cout << "启用自动曝光模式" << std::endl;
-        int nRet = MV_CC_SetEnumValue(handle, "ExposureAuto", 2); // 2 = 连续自动曝光
-        if (nRet != MV_OK) {
-            std::cout << "启用自动曝光失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+        MV_CC_SetEnumValue(handle, "ExposureAuto", 2); // 2 = 连续自动曝光
         } else {
-            std::cout << "自动曝光模式启用成功" << std::endl;
-        }
-    } else {
-        // 关闭自动曝光
-        int nRet = MV_CC_SetEnumValue(handle, "ExposureAuto", 0); // 0 = 关闭自动曝光
-        if (nRet == MV_OK) {
-            std::cout << "自动曝光模式已关闭" << std::endl;
-        }
+        MV_CC_SetEnumValue(handle, "ExposureAuto", 0); // 0 = 关闭自动曝光
     }
     
     // 3. 配置增益参数
     if (params.gainValue > 0) {
-        std::cout << "设置增益: " << params.gainValue << std::endl;
         int nRet = MV_CC_SetFloatValue(handle, "Gain", params.gainValue);
         if (nRet != MV_OK) {
             std::cerr << "设置增益失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
             return false;
         }
-        std::cout << "增益设置成功" << std::endl;
     }
     
     // 4. 配置自动增益模式
     if (params.gainAutoMode) {
-        std::cout << "启用自动增益模式" << std::endl;
-        int nRet = MV_CC_SetEnumValue(handle, "GainAuto", 2); // 2 = 连续自动增益
-        if (nRet != MV_OK) {
-            std::cout << "启用自动增益失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+        MV_CC_SetEnumValue(handle, "GainAuto", 2); // 2 = 连续自动增益
         } else {
-            std::cout << "自动增益模式启用成功" << std::endl;
-        }
-    } else {
-        // 关闭自动增益
-        int nRet = MV_CC_SetEnumValue(handle, "GainAuto", 0); // 0 = 关闭自动增益
-        if (nRet == MV_OK) {
-            std::cout << "自动增益模式已关闭" << std::endl;
-        }
+        MV_CC_SetEnumValue(handle, "GainAuto", 0); // 0 = 关闭自动增益
     }
     
     // 5. 配置帧率
     if (params.frameRate > 0) {
-        std::cout << "设置帧率: " << params.frameRate << " fps" << std::endl;
-        int nRet = MV_CC_SetFloatValue(handle, "AcquisitionFrameRate", params.frameRate);
-        if (nRet != MV_OK) {
-            std::cout << "设置帧率失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
-        } else {
-            std::cout << "帧率设置成功" << std::endl;
-        }
+        MV_CC_SetFloatValue(handle, "AcquisitionFrameRate", params.frameRate);
     }
     
     // 6. 配置触发延时
     if (params.triggerDelayUs > 0) {
-        std::cout << "设置触发延时: " << params.triggerDelayUs << " μs" << std::endl;
-        int nRet = MV_CC_SetFloatValue(handle, "TriggerDelay", params.triggerDelayUs);
-        if (nRet != MV_OK) {
-            std::cout << "设置触发延时失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
-        } else {
-            std::cout << "触发延时设置成功" << std::endl;
-        }
+        MV_CC_SetFloatValue(handle, "TriggerDelay", params.triggerDelayUs);
     }
     
-    std::cout << "相机参数配置完成" << std::endl;
     return true;
 }
 
@@ -257,14 +218,13 @@ static bool captureSingleImage(
         }
         if (!pSelectedDevice) pSelectedDevice = deviceList.pDeviceInfo[0];
         
-        // 3. 创建句柄
+        // 3. 创建句柄并打开设备
         nRet = MV_CC_CreateHandle(&handle, pSelectedDevice);
         if (nRet != MV_OK || !handle) {
             std::cerr << "[" << direction << "] 创建相机句柄失败" << std::endl;
             return false;
         }
         
-        // 4. 打开设备
         nRet = MV_CC_OpenDevice(handle);
         if (nRet != MV_OK) {
             std::cerr << "[" << direction << "] 打开相机失败" << std::endl;
@@ -272,13 +232,9 @@ static bool captureSingleImage(
             return false;
         }
         
-        // 5. 设置像素格式
-        nRet = MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8");
-        if (nRet != MV_OK) {
-            std::cout << "[" << direction << "] 设置像素格式失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
-        }
+        // 4. 设置像素格式和配置相机参数
+        MV_CC_SetEnumValueByString(handle, "PixelFormat", "Mono8");
         
-        // 6. 配置相机参数
         if (!configureCameraParams(handle, params)) {
             std::cerr << "[" << direction << "] 配置相机参数失败" << std::endl;
             MV_CC_CloseDevice(handle);
@@ -286,113 +242,65 @@ static bool captureSingleImage(
             return false;
         }
         
-        // 7. 验证相机参数是否设置成功
-        std::cout << "[" << direction << "] 验证相机参数设置..." << std::endl;
+        // 5. 验证和调整相机参数
         MVCC_FLOATVALUE actualExposure, actualGain;
-        if (MV_CC_GetFloatValue(handle, "ExposureTime", &actualExposure) == MV_OK) {
-            std::cout << "[" << direction << "] 实际曝光时间: " << actualExposure.fCurValue << " μs" << std::endl;
-            if (std::abs(actualExposure.fCurValue - params.exposureTimeUs) > 100.0f) {
-                std::cerr << "[" << direction << "] 警告：曝光时间设置不匹配！期望: " << params.exposureTimeUs 
-                          << " μs, 实际: " << actualExposure.fCurValue << " μs" << std::endl;
-                
-                // 如果曝光时间被自动调整，尝试重新设置
-                std::cout << "[" << direction << "] 尝试重新设置曝光时间..." << std::endl;
-                int retrySetExp = MV_CC_SetFloatValue(handle, "ExposureTime", params.exposureTimeUs);
-                if (retrySetExp == MV_OK) {
-                    std::cout << "[" << direction << "] 曝光时间重新设置成功" << std::endl;
-                } else {
-                    std::cerr << "[" << direction << "] 曝光时间重新设置失败，错误码: 0x" << std::hex << retrySetExp << std::dec << std::endl;
-                }
-            }
-        }
-        if (MV_CC_GetFloatValue(handle, "Gain", &actualGain) == MV_OK) {
-            std::cout << "[" << direction << "] 实际增益: " << actualGain.fCurValue << std::endl;
-            if (std::abs(actualGain.fCurValue - params.gainValue) > 0.5f) {
-                std::cerr << "[" << direction << "] 警告：增益设置不匹配！期望: " << params.gainValue 
-                          << ", 实际: " << actualGain.fCurValue << std::endl;
-            }
-        }
+        MV_CC_GetFloatValue(handle, "ExposureTime", &actualExposure);
+        MV_CC_GetFloatValue(handle, "Gain", &actualGain);
         
-        // 8. 确保自动曝光和自动增益完全关闭
-        MV_CC_SetEnumValue(handle, "ExposureAuto", 0); // 强制关闭自动曝光
-        MV_CC_SetEnumValue(handle, "GainAuto", 0);     // 强制关闭自动增益
-        std::cout << "[" << direction << "] 强制关闭自动曝光和自动增益" << std::endl;
+        std::cout << "[" << direction << "] 实际曝光时间: " << actualExposure.fCurValue << " μs" << std::endl;
+        std::cout << "[" << direction << "] 实际增益: " << actualGain.fCurValue << std::endl;
         
-        // 9. 如果曝光时间被限制，调整增益来补偿
-        if (actualExposure.fCurValue < params.exposureTimeUs * 0.8f) {
-            std::cout << "[" << direction << "] 曝光时间受限，增加增益补偿..." << std::endl;
-            float compensationGain = params.gainValue * 1.5f; // 增加50%增益
-            if (compensationGain > 20.0f) compensationGain = 20.0f; // 限制最大增益
-            MV_CC_SetFloatValue(handle, "Gain", compensationGain);
-            std::cout << "[" << direction << "] 增益已调整为: " << compensationGain << std::endl;
-        }
+        // 确保自动曝光和自动增益完全关闭
+        MV_CC_SetEnumValue(handle, "ExposureAuto", 0);
+        MV_CC_SetEnumValue(handle, "GainAuto", 0);
         
-        // 7. 设置触发模式
-        nRet = MV_CC_SetEnumValue(handle, "TriggerMode", 1);   // 1 = On
+        // 不进行自动增益补偿，保持用户设定的增益值
+        
+        // 6. 设置触发模式和开始取流
+        nRet = MV_CC_SetEnumValue(handle, "TriggerMode", 1);
         if (nRet != MV_OK) {
-            std::cerr << "[" << direction << "] 设置触发模式失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+            std::cerr << "[" << direction << "] 设置触发模式失败" << std::endl;
             MV_CC_CloseDevice(handle);
             MV_CC_DestroyHandle(handle);
             return false;
         }
         
-        // 8. 设置触发源为软件触发
-        nRet = MV_CC_SetEnumValue(handle, "TriggerSource", 7); // 7 = Software
-        if (nRet != MV_OK) {
-            std::cerr << "[" << direction << "] 设置触发源失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
-            MV_CC_CloseDevice(handle);
-            MV_CC_DestroyHandle(handle);
-            return false;
-        }
+        MV_CC_SetEnumValue(handle, "TriggerSource", 7); // 软件触发
+        MV_CC_SetEnumValue(handle, "AcquisitionMode", 2); // 连续采集
         
-        // 9. 设置采集模式为连续采集
-        nRet = MV_CC_SetEnumValue(handle, "AcquisitionMode", 2); // 2 = Continuous
-        if (nRet != MV_OK) {
-            std::cerr << "[" << direction << "] 设置采集模式失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
-            MV_CC_CloseDevice(handle);
-            MV_CC_DestroyHandle(handle);
-            return false;
-        }
-        
-        // 10. 开始取流
         nRet = MV_CC_StartGrabbing(handle);
         if (nRet != MV_OK) {
-            std::cerr << "[" << direction << "] 开始取流失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+            std::cerr << "[" << direction << "] 开始取流失败" << std::endl;
             MV_CC_CloseDevice(handle);
             MV_CC_DestroyHandle(handle);
             return false;
         }
         
-        // 相机预热：等待相机稳定
-        std::cout << "[" << direction << "] 相机预热中，等待稳定..." << std::endl;
+        // 相机预热并发送软触发
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        
-        // 11. 发送软触发命令
         std::cout << "[" << direction << "] 发送软触发命令..." << std::endl;
+        
         nRet = MV_CC_SetCommandValue(handle, "TriggerSoftware");
         if (nRet != MV_OK) {
-            std::cerr << "[" << direction << "] 软触发失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
+            std::cerr << "[" << direction << "] 软触发失败" << std::endl;
             MV_CC_StopGrabbing(handle);
             MV_CC_CloseDevice(handle);
             MV_CC_DestroyHandle(handle);
             return false;
         }
         
-        // 等待相机完成曝光和图像传输
-        // 根据曝光时间动态计算等待时间
+        // 等待相机完成曝光和传输
         MVCC_FLOATVALUE currentExposure;
-        int waitTimeMs = 2000; // 默认等待2秒
+        int waitTimeMs = 2000;
         if (MV_CC_GetFloatValue(handle, "ExposureTime", &currentExposure) == MV_OK) {
-            // 等待时间 = 曝光时间 + 额外缓冲时间（1000ms）
             waitTimeMs = static_cast<int>(static_cast<double>(currentExposure.fCurValue) / 1000.0) + 1000;
-            // 限制最大等待时间为8秒，最小等待时间为1秒
             if (waitTimeMs > 8000) waitTimeMs = 8000;
             if (waitTimeMs < 1000) waitTimeMs = 1000;
         }
         std::cout << "[" << direction << "] 等待相机完成曝光和传输: " << waitTimeMs << "ms" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(waitTimeMs));
         
-        // 12. 获取图像（带重试机制和质量检查）
+        // 7. 获取图像（带重试机制和质量检查）
         std::cout << "[" << direction << "] 开始获取图像..." << std::endl;
         bool imageCaptured = false;
         int retryCount = 0;
@@ -400,38 +308,26 @@ static bool captureSingleImage(
         
         while (!imageCaptured && retryCount < maxRetries) {
             if (retryCount > 0) {
-                std::cout << "[" << direction << "] 第 " << (retryCount + 1) << " 次尝试获取图像..." << std::endl;
-                
-                // 重试前重新设置触发模式，解决错误码0x80000007问题
-                std::cout << "[" << direction << "] 重试前重新配置触发模式..." << std::endl;
-                MV_CC_SetEnumValue(handle, "TriggerMode", 0); // 先关闭触发模式
+                // 重试前重新配置触发模式
+                MV_CC_SetEnumValue(handle, "TriggerMode", 0);
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                MV_CC_SetEnumValue(handle, "TriggerMode", 1); // 重新开启触发模式
+                MV_CC_SetEnumValue(handle, "TriggerMode", 1);
                 std::this_thread::sleep_for(std::chrono::milliseconds(100));
-                
-                // 重新发送软触发命令
-                std::cout << "[" << direction << "] 重新发送软触发命令..." << std::endl;
                 MV_CC_SetCommandValue(handle, "TriggerSoftware");
-                
-                // 重试前等待一段时间
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             }
             
             MV_FRAME_OUT stOutFrame = {0};
-            nRet = MV_CC_GetImageBuffer(handle, &stOutFrame, 5000); // 增加超时时间到5秒
+            nRet = MV_CC_GetImageBuffer(handle, &stOutFrame, 5000);
             
             if (nRet == MV_OK) {
-                // 检查图像是否有效
                 if (stOutFrame.stFrameInfo.nWidth > 0 && stOutFrame.stFrameInfo.nHeight > 0 && stOutFrame.pBufAddr != nullptr) {
                     std::cout << "[" << direction << "] 图像获取成功，等待数据稳定..." << std::endl;
-                    
-                    // 增加延时确保图像数据完全传输完成
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                     
-                    // 13. 创建图像并检查质量
+                    // 创建图像并检查质量
                     cv::Mat img(stOutFrame.stFrameInfo.nHeight, stOutFrame.stFrameInfo.nWidth, CV_8UC1, stOutFrame.pBufAddr);
                     
-                    // 检查图像质量：计算平均亮度和标准差，确保图像质量稳定
                     cv::Scalar meanValue = cv::mean(img);
                     cv::Scalar stdValue;
                     cv::meanStdDev(img, meanValue, stdValue);
@@ -477,7 +373,7 @@ static bool captureSingleImage(
                         // 如果还有重试机会，继续循环
                         if (retryCount < maxRetries) {
                             continue;
-                        } else {
+        } else {
                             std::cerr << "[" << direction << "] 达到最大重试次数，跳过保存" << std::endl;
                             break;
                         }
@@ -505,7 +401,7 @@ static bool captureSingleImage(
                     std::cerr << "[" << direction << "] 获取到无效图像数据" << std::endl;
                     retryCount++;
                 }
-            } else {
+        } else {
                 std::cerr << "[" << direction << "] 获取图像失败，错误码: 0x" << std::hex << nRet << std::dec << std::endl;
                 retryCount++;
                 
@@ -648,24 +544,24 @@ bool runVerticalProjectStepAndCapture(
     using namespace slmaster::device;
     try {
         // 投影仪初始化
-        std::cout << "[垂直] 正在获取并连接投影仪: " << projectorModel << std::endl;
+        std::cout << "\n=== 垂直条纹投影与拍摄 ===" << std::endl;
+        std::cout << "连接投影仪: " << projectorModel << std::endl;
         slmaster::device::ProjectorFactory factory;
         Projector* projector = factory.getProjector(projectorModel);
         if (!projector || !projector->connect()) {
-            std::cerr << u8"垂直条纹：投影仪连接失败" << std::endl;
+            std::cerr << "投影仪连接失败" << std::endl;
             return false;
         }
-        std::cout << "[垂直] 投影仪已连接" << std::endl;
+        std::cout << "投影仪已连接" << std::endl;
 
         // 相机参数配置
         CameraParams params;
         if (useSavedParams) { 
             loadCameraParams(params); 
         } else {
-            // 优化默认参数，确保更好的图像质量
-            params.exposureTimeUs = 20000.0f;  // 增加曝光时间到20ms，确保足够的光量
-            params.gainValue = 8.0f;           // 适当增加增益
-            params.frameRate = 5.0f;           // 降低帧率，确保稳定性
+            params.exposureTimeUs = 20000.0f;
+            params.gainValue = 8.0f;
+            params.frameRate = 5.0f;
             params.exposureAutoMode = false; 
             params.gainAutoMode = false; 
             params.triggerDelayUs = 0;
@@ -674,14 +570,12 @@ bool runVerticalProjectStepAndCapture(
         }
         
         // 确保参数在合理范围内
-        if (params.exposureTimeUs < 5000.0f) {
-            std::cout << "[垂直] 曝光时间过短，调整为5000μs" << std::endl;
-            params.exposureTimeUs = 5000.0f;
-        }
-        if (params.gainValue < 3.0f) {
-            std::cout << "[垂直] 增益过低，调整为3.0" << std::endl;
-            params.gainValue = 3.0f;
-        }
+        if (params.exposureTimeUs < 5000.0f) params.exposureTimeUs = 5000.0f;
+        if (params.gainValue < 3.0f) params.gainValue = 3.0f;
+        
+        // 显示相机参数
+        std::cout << "相机参数: 曝光=" << params.exposureTimeUs << "μs, 增益=" << params.gainValue 
+                  << ", 帧率=" << params.frameRate << "fps" << std::endl;
 
         // 创建输出目录
         std::string saveDir = outputDir.empty() ? (std::filesystem::current_path() / "images").string() : outputDir;
@@ -712,16 +606,15 @@ bool runVerticalProjectStepAndCapture(
         patternSets[0].patternArrayCounts_ = deviceWidth;
         patternSets[0].imgs_.assign(imgs.begin(), imgs.begin() + steps);
 
-        std::cout << "[垂直] 正在装载图案表(垂直方向) ..." << std::endl;
+        std::cout << "装载图案表..." << std::endl;
         if (!projector->populatePatternTableData(patternSets)) {
-            std::cerr << u8"垂直条纹：装载图案表失败" << std::endl;
+            std::cerr << "装载图案表失败" << std::endl;
             projector->disConnect(); 
             return false;
         }
-        std::cout << "[垂直] 图案表装载完成" << std::endl;
 
-        // 按照 ProjectorTest 的稳定流程：停止-断开-重连-重新加载-设LED-开始投影-稳定-停止-再次开始
-        std::cout << "[垂直] 执行稳定流程：停止->断开->重连->重载图案->设LED->开始投影" << std::endl;
+        // 投影仪稳定流程
+        std::cout << "执行投影仪稳定流程..." << std::endl;
         projector->stop();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
             projector->disConnect();
@@ -730,77 +623,71 @@ bool runVerticalProjectStepAndCapture(
             projector->disConnect(); 
             return false; 
         }
-        std::cout << "[垂直] 已重新连接投影仪，重新装载图案表..." << std::endl;
         if (!projector->populatePatternTableData(patternSets)) { 
             projector->disConnect(); 
             return false; 
         }
-        // 设置LED电流并确保稳定性
-        std::cout << "[垂直] 设置LED电流为90%" << std::endl;
+        
         projector->setLEDCurrent(0.9, 0.9, 0.9);
-        std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 等待LED稳定
-        std::cout << "[垂直] LED电流设置完成，等待稳定" << std::endl;
-        std::cout << "[垂直] 开始连续投影(project=true)" << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
         if (!projector->project(true)) { 
             projector->disConnect(); 
             return false; 
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-        std::cout << "[垂直] 停止连续投影，以确保状态干净" << std::endl;
         projector->stop();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        std::cout << "[垂直] 重新开始连续投影(project=true)" << std::endl;
+        
         if (!projector->project(true)) { 
             projector->disConnect(); 
             return false; 
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        
+        // 暂停投影，准备步进控制
+        std::cout << "暂停投影，准备步进控制..." << std::endl;
+        projector->pause();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
 
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10,
             50
         );
-        std::cout << "[垂直] 步进等待时间(ms): " << waitMs << std::endl;
 
-        // 主循环：严格的同步机制 - 只有相机拍摄成功后才能进行下一次步进
+        // 主循环：开始拍摄
+        std::cout << "\n=== 开始垂直条纹拍摄 ===" << std::endl;
+        std::cout << "步数: " << steps << ", 步进等待时间: " << waitMs << "ms" << std::endl;
+
         bool allSuccess = true;
         for (int i = 0; i < steps; ++i) {
-            std::cout << "[垂直] ========== 开始第 " << (i+1) << "/" << steps << " 帧拍摄流程 ==========" << std::endl;
+            std::cout << "\n--- 第 " << (i+1) << "/" << steps << " 帧 ---" << std::endl;
             
             // 投影仪步进
-            std::cout << "[垂直] 步骤1: 投影仪步进到第 " << (i+1) << " 帧" << std::endl;
             if (!projector->step()) { 
-                std::cerr << u8"垂直条纹：步进失败" << std::endl; 
+                std::cerr << "步进失败" << std::endl; 
                 allSuccess = false;
                 break; 
             }
-            std::cout << "[垂直] 投影仪步进成功" << std::endl;
             
-            // 等待投影仪稳定 - 增加等待时间确保投影完全稳定
-            std::cout << "[垂直] 步骤2: 等待投影仪稳定..." << std::endl;
+            // 立即暂停，确保投影仪停留在当前帧（防止连续投影）
+            projector->pause();
+            
+            // 等待投影仪稳定
             std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
-
-            // 额外等待时间，确保投影仪完全稳定（特别是前几帧）
             if (i < 2) {
-                std::cout << "[垂直] 前几帧额外稳定时间..." << std::endl;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             }
-            std::cout << "[垂直] 投影仪稳定完成" << std::endl;
 
-            // 相机拍摄（每次步进时完整的相机生命周期）
-            std::cout << "[垂直] 步骤3: 开始相机拍摄..." << std::endl;
-            std::string outputPath = (std::filesystem::path(saveDir) / ("I" + std::to_string(i+1) + "_V.png")).string();
+            // 相机拍摄 - 垂直条纹命名为 I1-IN
+            std::string outputPath = (std::filesystem::path(saveDir) / ("I" + std::to_string(i+1) + ".png")).string();
             
             bool captureSuccess = false;
             int captureRetryCount = 0;
             const int maxCaptureRetries = 3;
             
-            // 相机拍摄重试机制 - 只有拍摄成功才能继续
             while (!captureSuccess && captureRetryCount < maxCaptureRetries) {
                 if (captureRetryCount > 0) {
-                    std::cout << "[垂直] 相机拍摄重试第 " << captureRetryCount << " 次..." << std::endl;
-                    // 重试前等待投影仪重新稳定
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 }
                 
@@ -808,30 +695,23 @@ bool runVerticalProjectStepAndCapture(
                 captureRetryCount++;
                 
                 if (!captureSuccess) {
-                    std::cerr << "[垂直] 第 " << (i+1) << " 帧拍摄失败，重试次数: " << captureRetryCount << std::endl;
                     if (captureRetryCount >= maxCaptureRetries) {
-                        std::cerr << "[垂直] 第 " << (i+1) << " 帧拍摄达到最大重试次数，停止整个流程" << std::endl;
+                        std::cerr << "第 " << (i+1) << " 帧拍摄达到最大重试次数，停止流程" << std::endl;
                         allSuccess = false;
                         break;
                     }
-                } else {
-                    std::cout << "[垂直] 第 " << (i+1) << " 帧拍摄成功！" << std::endl;
                 }
             }
             
-            // 如果拍摄失败，中断整个流程
             if (!captureSuccess) {
-                std::cerr << "[垂直] 由于拍摄失败，中断整个拍摄流程" << std::endl;
+                std::cerr << "拍摄失败，中断流程" << std::endl;
                 break;
             }
             
-            // 帧间间隔，确保系统完全稳定
-            std::cout << "[垂直] 步骤4: 帧间稳定间隔..." << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            std::cout << "[垂直] ========== 第 " << (i+1) << " 帧拍摄流程完成 ==========" << std::endl;
         }
 
-        std::cout << "[垂直] 完成，停止投影并清理资源" << std::endl;
+        std::cout << "\n垂直条纹拍摄完成!" << std::endl;
         projector->stop();
             projector->disConnect();
         return allSuccess;
@@ -858,24 +738,24 @@ bool runHorizontalProjectStepAndCapture(
     using namespace slmaster::device;
     try {
         // 投影仪初始化
-        std::cout << "[水平] 正在获取并连接投影仪: " << projectorModel << std::endl;
+        std::cout << "\n=== 水平条纹投影与拍摄 ===" << std::endl;
+        std::cout << "连接投影仪: " << projectorModel << std::endl;
         slmaster::device::ProjectorFactory factory;
         Projector* projector = factory.getProjector(projectorModel);
         if (!projector || !projector->connect()) { 
-            std::cerr << u8"水平条纹：投影仪连接失败" << std::endl; 
+            std::cerr << "投影仪连接失败" << std::endl; 
             return false; 
         }
-        std::cout << "[水平] 投影仪已连接" << std::endl;
+        std::cout << "投影仪已连接" << std::endl;
 
         // 相机参数配置
         CameraParams params; 
         if (useSavedParams) { 
             loadCameraParams(params); 
         } else { 
-            // 优化默认参数，确保更好的图像质量
-            params.exposureTimeUs = 20000.0f;  // 增加曝光时间到20ms，确保足够的光量
-            params.gainValue = 8.0f;           // 适当增加增益
-            params.frameRate = 5.0f;           // 降低帧率，确保稳定性
+            params.exposureTimeUs = 20000.0f;
+            params.gainValue = 8.0f;
+            params.frameRate = 5.0f;
             params.exposureAutoMode = false; 
             params.gainAutoMode = false; 
             params.triggerDelayUs = 0; 
@@ -884,21 +764,19 @@ bool runHorizontalProjectStepAndCapture(
         }
         
         // 确保参数在合理范围内
-        if (params.exposureTimeUs < 5000.0f) {
-            std::cout << "[水平] 曝光时间过短，调整为5000μs" << std::endl;
-            params.exposureTimeUs = 5000.0f;
-        }
-        if (params.gainValue < 3.0f) {
-            std::cout << "[水平] 增益过低，调整为3.0" << std::endl;
-            params.gainValue = 3.0f;
-        }
+        if (params.exposureTimeUs < 5000.0f) params.exposureTimeUs = 5000.0f;
+        if (params.gainValue < 3.0f) params.gainValue = 3.0f;
+        
+        // 显示相机参数
+        std::cout << "相机参数: 曝光=" << params.exposureTimeUs << "μs, 增益=" << params.gainValue 
+                  << ", 帧率=" << params.frameRate << "fps" << std::endl;
 
         // 创建输出目录
         std::string saveDir = outputDir.empty() ? (std::filesystem::current_path() / "images").string() : outputDir;
         try { 
             std::filesystem::create_directories(saveDir); 
         } catch (...) {
-            std::cerr << "[水平] 创建输出目录失败: " << saveDir << std::endl;
+            std::cerr << "创建输出目录失败: " << saveDir << std::endl;
             projector->disConnect();
             return false;
         }
@@ -906,7 +784,7 @@ bool runHorizontalProjectStepAndCapture(
         // 生成水平条纹（后N张）
         auto imgs = generatePhaseShiftFringeImages(deviceWidth, deviceHeight, frequency, intensity, offset, noiseStd, steps);
         if ((int)imgs.size() != steps * 2) { 
-            std::cerr << u8"水平条纹：生成图像失败" << std::endl; 
+            std::cerr << "生成图像失败" << std::endl; 
             projector->disConnect();
             return false;
         }
@@ -922,15 +800,14 @@ bool runHorizontalProjectStepAndCapture(
         patternSets[0].patternArrayCounts_ = deviceWidth;
         patternSets[0].imgs_.assign(imgs.begin() + steps, imgs.end());
 
-        std::cout << "[水平] 正在装载图案表(水平方向) ..." << std::endl;
+        std::cout << "装载图案表..." << std::endl;
         if (!projector->populatePatternTableData(patternSets)) { 
             projector->disConnect(); 
             return false; 
         }
-        std::cout << "[水平] 图案表装载完成" << std::endl;
 
-        // 按照 ProjectorTest 的稳定流程
-        std::cout << "[水平] 执行稳定流程：停止->断开->重连->重载图案->设LED->开始投影" << std::endl;
+        // 投影仪稳定流程
+        std::cout << "执行投影仪稳定流程..." << std::endl;
         projector->stop();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         projector->disConnect();
@@ -939,76 +816,69 @@ bool runHorizontalProjectStepAndCapture(
             projector->disConnect(); 
             return false; 
         }
-        std::cout << "[水平] 已重新连接投影仪，重新装载图案表..." << std::endl;
         if (!projector->populatePatternTableData(patternSets)) { 
             projector->disConnect(); 
             return false; 
         }
-        // 设置LED电流并确保稳定性
-        std::cout << "[水平] 设置LED电流为90%" << std::endl;
+        
         projector->setLEDCurrent(0.9, 0.9, 0.9);
-        std::this_thread::sleep_for(std::chrono::milliseconds(500)); // 等待LED稳定
-        std::cout << "[水平] LED电流设置完成，等待稳定" << std::endl;
-        std::cout << "[水平] 开始连续投影(project=true)" << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
         if (!projector->project(true)) { 
             projector->disConnect(); 
             return false; 
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(2000));
-        std::cout << "[水平] 停止连续投影，以确保状态干净" << std::endl;
         projector->stop();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        std::cout << "[水平] 重新开始连续投影(project=true)" << std::endl;
         if (!projector->project(true)) { 
             projector->disConnect(); 
             return false; 
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        
+        // 暂停投影，准备步进控制
+        std::cout << "暂停投影，准备步进控制..." << std::endl;
+        projector->pause();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
         
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10, 
             50
         );
-        std::cout << "[水平] 步进等待时间(ms): " << waitMs << std::endl;
-
-        // 主循环：严格的同步机制 - 只有相机拍摄成功后才能进行下一次步进
+        // 主循环：开始拍摄
+        std::cout << "\n=== 开始水平条纹拍摄 ===" << std::endl;
+        std::cout << "步数: " << steps << ", 步进等待时间: " << waitMs << "ms" << std::endl;
+        
         bool allSuccess = true;
         for (int i = 0; i < steps; ++i) {
-            std::cout << "[水平] ========== 开始第 " << (i+1) << "/" << steps << " 帧拍摄流程 ==========" << std::endl;
+            std::cout << "\n--- 第 " << (i+1) << "/" << steps << " 帧 ---" << std::endl;
             
             // 投影仪步进
-            std::cout << "[水平] 步骤1: 投影仪步进到第 " << (i+1) << " 帧" << std::endl;
             if (!projector->step()) { 
-                std::cerr << u8"水平条纹：步进失败" << std::endl; 
+                std::cerr << "步进失败" << std::endl; 
                 allSuccess = false;
                 break; 
             }
-            std::cout << "[水平] 投影仪步进成功" << std::endl;
             
-            // 等待投影仪稳定 - 增加等待时间确保投影完全稳定
-            std::cout << "[水平] 步骤2: 等待投影仪稳定..." << std::endl;
+            // 立即暂停，确保投影仪停留在当前帧（防止连续投影）
+            projector->pause();
+            
+            // 等待投影仪稳定
             std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
-            
-            // 额外等待时间，确保投影仪完全稳定（特别是前几帧）
             if (i < 2) {
-                std::cout << "[水平] 前几帧额外稳定时间..." << std::endl;
                 std::this_thread::sleep_for(std::chrono::milliseconds(1000));
             }
-            std::cout << "[水平] 投影仪稳定完成" << std::endl;
 
-            // 相机拍摄（每次步进时完整的相机生命周期）
-            std::cout << "[水平] 步骤3: 开始相机拍摄..." << std::endl;
-            std::string outputPath = (std::filesystem::path(saveDir) / ("I" + std::to_string(i+1) + "_H.png")).string();
+            // 相机拍摄 - 水平条纹命名为 I(N+1)-I(2N)
+            std::string outputPath = (std::filesystem::path(saveDir) / ("I" + std::to_string(steps + i + 1) + ".png")).string();
             
             bool captureSuccess = false;
             int captureRetryCount = 0;
             const int maxCaptureRetries = 3;
             
-            // 相机拍摄重试机制 - 只有拍摄成功才能继续
             while (!captureSuccess && captureRetryCount < maxCaptureRetries) {
                 if (captureRetryCount > 0) {
-                    std::cout << "[水平] 相机拍摄重试第 " << captureRetryCount << " 次..." << std::endl;
-                    // 重试前等待投影仪重新稳定
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 }
                 
@@ -1016,35 +886,28 @@ bool runHorizontalProjectStepAndCapture(
                 captureRetryCount++;
                 
                 if (!captureSuccess) {
-                    std::cerr << "[水平] 第 " << (i+1) << " 帧拍摄失败，重试次数: " << captureRetryCount << std::endl;
                     if (captureRetryCount >= maxCaptureRetries) {
-                        std::cerr << "[水平] 第 " << (i+1) << " 帧拍摄达到最大重试次数，停止整个流程" << std::endl;
+                        std::cerr << "第 " << (i+1) << " 帧拍摄达到最大重试次数，停止流程" << std::endl;
                         allSuccess = false;
                         break;
                     }
-                } else {
-                    std::cout << "[水平] 第 " << (i+1) << " 帧拍摄成功！" << std::endl;
                 }
             }
             
-            // 如果拍摄失败，中断整个流程
             if (!captureSuccess) {
-                std::cerr << "[水平] 由于拍摄失败，中断整个拍摄流程" << std::endl;
+                std::cerr << "拍摄失败，中断流程" << std::endl;
                 break;
             }
             
-            // 帧间间隔，确保系统完全稳定
-            std::cout << "[水平] 步骤4: 帧间稳定间隔..." << std::endl;
             std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            std::cout << "[水平] ========== 第 " << (i+1) << " 帧拍摄流程完成 ==========" << std::endl;
         }
 
-        std::cout << "[水平] 完成，停止投影并清理资源" << std::endl;
+        std::cout << "\n水平条纹拍摄完成!" << std::endl;
         projector->stop();
         projector->disConnect();
         return allSuccess;
     } catch (const std::exception& e) {
-        std::cerr << "[水平] 异常: " << e.what() << std::endl;
+        std::cerr << "水平条纹异常: " << e.what() << std::endl;
         return false;
     }
 }

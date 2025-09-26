@@ -29,11 +29,11 @@
 
 // 相机参数结构体与加载/应用
 struct CameraParams {
-    float exposureTimeUs = -1.0f;
+    float exposureTimeUs = 20000.0f;  // 默认20ms曝光
     bool exposureAutoMode = false;
-    float gainValue = -1.0f;
+    float gainValue = 8.0f;           // 默认增益8
     bool gainAutoMode = false;
-    float frameRate = -1.0f;
+    float frameRate = 10.0f;          // 默认10fps
     int triggerDelayUs = 0;
     bool enableChunkData = false;
     bool printCurrentParams = true;
@@ -222,8 +222,9 @@ static bool saveCameraParams(const CameraParams &params, const std::string &file
 }
 
 // 新功能：投影单张图案（全白或条纹）后保持静止，并启动相机实时预览，允许现场调参并保存
-// useWhitePattern: true=全白；false=生成垂直条纹
-static int run_projector_single_pattern_and_live_tuning(bool useWhitePattern)
+// patternType: 0=全白, 1=垂直条纹, 2=水平条纹
+// frequency: 条纹频率（仅对条纹有效）
+static int run_projector_single_pattern_and_live_tuning(int patternType, int frequency = 15)
 {
     using namespace slmaster::device;
 
@@ -239,12 +240,21 @@ static int run_projector_single_pattern_and_live_tuning(bool useWhitePattern)
     const int H = info.height_ > 0 ? info.height_ : 1080;
 
     cv::Mat pattern;
-    if (useWhitePattern) {
+    std::string patternName;
+    if (patternType == 0) {
+        // 全白图案
         pattern = cv::Mat(H, W, CV_8UC1, cv::Scalar(255));
-    } else {
-        // 生成一张垂直条纹图
-        pattern = generateStripeImage(W, H, true, /*frequency*/15, /*intensity*/100, /*offset*/128);
+        patternName = "全白图案";
+    } else if (patternType == 1) {
+        // 垂直条纹图案
+        pattern = generateStripeImage(W, H, true, frequency, /*intensity*/100, /*offset*/128);
         if (pattern.empty()) pattern = cv::Mat(H, W, CV_8UC1, cv::Scalar(255));
+        patternName = "垂直条纹图案(频率:" + std::to_string(frequency) + ")";
+    } else {
+        // 水平条纹图案
+        pattern = generateStripeImage(W, H, false, frequency, /*intensity*/100, /*offset*/128);
+        if (pattern.empty()) pattern = cv::Mat(H, W, CV_8UC1, cv::Scalar(255));
+        patternName = "水平条纹图案(频率:" + std::to_string(frequency) + ")";
     }
 
     PatternOrderSet set;
@@ -252,29 +262,108 @@ static int run_projector_single_pattern_and_live_tuning(bool useWhitePattern)
     set.patternArrayCounts_ = W;
     set.illumination_ = RGB;
     set.invertPatterns_ = false;
-    set.isVertical_ = true;
+    set.isVertical_ = (patternType != 2); // 水平条纹时设为false
     set.isOneBit_ = false;
     set.exposureTime_ = 8000;
     set.preExposureTime_ = 5000;
     set.postExposureTime_ = 5000;
     std::vector<PatternOrderSet> patternSets{ set };
 
-    projector->setLEDCurrent(0.9, 0.9, 0.9);
-    if (!projector->populatePatternTableData(patternSets) || !projector->project(false)) {
-        std::cerr << "装载图案或进入步进模式失败" << std::endl;
+    std::cout << "设置LED电流..." << std::endl;
+    if (!projector->setLEDCurrent(0.9, 0.9, 0.9)) {
+        std::cerr << "LED电流设置失败" << std::endl;
         projector->disConnect();
         return 1;
     }
-    if (!projector->step()) {
-        std::cerr << "步进显示单张图案失败" << std::endl;
-        projector->stop(); projector->disConnect();
+    
+    std::cout << "加载图案数据到投影仪..." << std::endl;
+    if (!projector->populatePatternTableData(patternSets)) {
+        std::cerr << "装载图案失败" << std::endl;
+        projector->disConnect();
         return 1;
     }
-    // 等待稳定并暂停
-    int wait_ms = (set.preExposureTime_ + set.exposureTime_ + set.postExposureTime_) / 1000 + 500;
-    if (wait_ms < 1000) wait_ms = 1000;
-    std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
+    
+    // 执行投影仪稳定流程（参考ProjectorWithCamera.cpp的稳定方法）
+    std::cout << "执行投影仪稳定流程..." << std::endl;
+    projector->stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    projector->disConnect();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    if (!projector->connect()) {
+        std::cerr << "重新连接投影仪失败" << std::endl;
+        return 1;
+    }
+    
+    if (!projector->populatePatternTableData(patternSets)) {
+        std::cerr << "重新装载图案失败" << std::endl;
+        projector->disConnect();
+        return 1;
+    }
+    
+    // 设置LED电流并等待稳定（增加稳定时间减少频闪）
+    std::cout << "设置LED电流并等待稳定..." << std::endl;
+    projector->setLEDCurrent(0.9, 0.9, 0.9);
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // 增加到1秒
+    
+    // 验证LED电流设置
+    double red, green, blue;
+    if (projector->getLEDCurrent(red, green, blue)) {
+        std::cout << "LED电流设置: R=" << red << " G=" << green << " B=" << blue << std::endl;
+    } else {
+        std::cout << "警告: 无法验证LED电流设置" << std::endl;
+    }
+    
+    // 启动连续投影模式
+    std::cout << "启动连续投影模式..." << std::endl;
+    if (!projector->project(true)) {
+        std::cerr << "启动连续投影模式失败" << std::endl;
+        projector->disConnect();
+        return 1;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    
+    // 停止并重新启动以确保稳定
+    projector->stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    if (!projector->project(true)) {
+        std::cerr << "重新启动连续投影模式失败" << std::endl;
+        projector->disConnect();
+        return 1;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    // 步进到第一帧
+    std::cout << "步进到第一帧..." << std::endl;
+    if (!projector->step()) {
+        std::cerr << "步进失败" << std::endl;
+        projector->stop();
+        projector->disConnect();
+        return 1;
+    }
+    
+    // 暂停以避免自动循环，保持当前帧稳定显示
+    std::cout << "暂停投影，保持当前帧稳定显示..." << std::endl;
     projector->pause();
+    
+    // 关键：增加更长的稳定时间（减少频闪）
+    std::cout << "等待投影完全稳定（8秒）..." << std::endl;
+    std::this_thread::sleep_for(std::chrono::milliseconds(8000));
+    
+    // 额外的暂停确认，确保投影仪完全稳定
+    std::cout << "确认投影仪暂停状态..." << std::endl;
+    projector->pause(); // 再次确认暂停状态
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    std::cout << "投影仪正在显示" << patternName << std::endl;
+    std::cout << "图案尺寸: " << W << "x" << H << std::endl;
+    
+    // 验证投影仪状态
+    double currentRed, currentGreen, currentBlue;
+    if (projector->getLEDCurrent(currentRed, currentGreen, currentBlue)) {
+        std::cout << "当前LED电流: R=" << currentRed << " G=" << currentGreen << " B=" << currentBlue << std::endl;
+    }
 
     // 2) 相机实时预览并允许调参
     CameraParams params{};
@@ -313,10 +402,11 @@ static int run_projector_single_pattern_and_live_tuning(bool useWhitePattern)
 
     std::cout << "实时预览：按键说明" << std::endl;
     std::cout << "  q/ESC: 退出  s: 保存参数到文件" << std::endl;
-    std::cout << "  +/- : 曝光×1.1 / ÷1.1" << std::endl;
-    std::cout << "  g/G : 增益 +0.5 / -0.5" << std::endl;
-    std::cout << "  f/F : 帧率 +1 / -1" << std::endl;
-    std::cout << "  t/T : 触发延时 +500us / -500us" << std::endl;
+    std::cout << "  8: 曝光时间 +1000us" << std::endl;
+    std::cout << "  2: 曝光时间 -1000us" << std::endl;
+    std::cout << "  6: 增益 +0.5" << std::endl;
+    std::cout << "  4: 增益 -0.5" << std::endl;
+    std::cout << "\n投影仪状态：正在连续投影" << patternName << std::endl;
 
     const int PREVIEW_W = 1080;
     const int PREVIEW_H = 720;
@@ -329,11 +419,109 @@ static int run_projector_single_pattern_and_live_tuning(bool useWhitePattern)
         if (ret == MV_OK && fr.pBufAddr && fr.stFrameInfo.nWidth > 0 && fr.stFrameInfo.nHeight > 0) {
             cv::Mat img(fr.stFrameInfo.nHeight, fr.stFrameInfo.nWidth, CV_8UC1, fr.pBufAddr);
             cv::Mat show; cv::cvtColor(img, show, cv::COLOR_GRAY2BGR);
-            // 叠加当前参数
-            char buf[256];
-            std::snprintf(buf, sizeof(buf), "Exp(us):%.0f  Gain:%.2f  FPS:%.1f  Delay(us):%d",
-                          params.exposureTimeUs, params.gainValue, params.frameRate, params.triggerDelayUs);
-            cv::putText(show, buf, {20, 30}, cv::FONT_HERSHEY_SIMPLEX, 0.8, {0, 255, 0}, 2);
+            
+            // 计算图像统计信息
+            cv::Scalar meanVal = cv::mean(img);
+            cv::Scalar meanStd;
+            cv::meanStdDev(img, meanVal, meanStd);
+            double minVal, maxVal;
+            cv::minMaxLoc(img, &minVal, &maxVal);
+            
+            // 叠加相机参数信息 - 更大字体
+            char buf1[300];
+            std::snprintf(buf1, sizeof(buf1), "Camera: Exp=%.0fus  Gain=%.1f  FPS=%.1f", 
+                          params.exposureTimeUs, params.gainValue, params.frameRate);
+            cv::putText(show, buf1, {20, 40}, cv::FONT_HERSHEY_SIMPLEX, 1.2, {0, 255, 0}, 3);
+            
+            // 叠加图像质量统计信息 - 更大字体
+            char buf2[300];
+            std::snprintf(buf2, sizeof(buf2), "Image: Bright=%.1f  Contrast=%.1f  Range=[%.0f-%.0f]", 
+                          meanVal[0], meanStd[0], minVal, maxVal);
+            cv::putText(show, buf2, {20, 80}, cv::FONT_HERSHEY_SIMPLEX, 1.2, {255, 255, 0}, 3);
+            
+            // 添加图像质量判断提示 - 更大字体，英文提示
+            std::string qualityText = "Quality: ";
+            cv::Scalar qualityColor = {0, 255, 0}; // 默认绿色（良好）
+            
+            if (meanVal[0] < 30) {
+                qualityText += "TOO DARK - Increase Exposure/Gain";
+                qualityColor = {0, 0, 255}; // 红色
+            } else if (meanVal[0] > 220) {
+                qualityText += "TOO BRIGHT - Decrease Exposure/Gain";
+                qualityColor = {0, 0, 255}; // 红色
+            } else if (meanStd[0] < 8) {
+                qualityText += "LOW CONTRAST - Adjust lighting";
+                qualityColor = {0, 165, 255}; // 橙色
+            } else {
+                qualityText += "GOOD - Image quality is acceptable";
+                qualityColor = {0, 255, 0}; // 绿色
+            }
+            
+            cv::putText(show, qualityText, {20, 120}, cv::FONT_HERSHEY_SIMPLEX, 1.0, qualityColor, 3);
+            
+            // 添加详细的参数说明 - 更大字体
+            cv::putText(show, "Bright: Average brightness (0-255, ideal: 50-200)", {20, 160}, cv::FONT_HERSHEY_SIMPLEX, 0.8, {200, 200, 200}, 2);
+            cv::putText(show, "Contrast: Standard deviation (>10 is good)", {20, 190}, cv::FONT_HERSHEY_SIMPLEX, 0.8, {200, 200, 200}, 2);
+            
+            // 添加操作提示 - 更大字体
+            cv::putText(show, "Controls: 8/2=Exposure  6/4=Gain  S=Save  Q=Exit", {20, 230}, cv::FONT_HERSHEY_SIMPLEX, 1.0, {0, 255, 255}, 3);
+            
+            // 添加简单的亮度分布条形图（放大显示）
+            int histHeight = 80;  // 从30增加到80
+            int histWidth = 300;  // 从200增加到300
+            int histX = show.cols - histWidth - 20;
+            int histY = 20;
+            
+            // 创建简化的亮度分布显示（分成5个区间）
+            std::vector<int> brightnessBins(5, 0);
+            for (int y = 0; y < img.rows; y += 10) { // 采样，提高性能
+                for (int x = 0; x < img.cols; x += 10) {
+                    int pixelValue = img.at<uchar>(y, x);
+                    int binIndex = std::min(4, pixelValue / 51); // 0-50, 51-102, 103-153, 154-204, 205-255
+                    brightnessBins[binIndex]++;
+                }
+            }
+            
+            // 找到最大值用于归一化
+            int maxBin = *std::max_element(brightnessBins.begin(), brightnessBins.end());
+            if (maxBin > 0) {
+                // 绘制背景
+                cv::rectangle(show, cv::Point(histX-5, histY-5), cv::Point(histX+histWidth+5, histY+histHeight+5), {50, 50, 50}, -1);
+                
+                // 绘制各个区间的条形图
+                for (int i = 0; i < 5; i++) {
+                    int barHeight = (brightnessBins[i] * histHeight) / maxBin;
+                    int barWidth = histWidth / 5;
+                    int barX = histX + i * barWidth;
+                    
+                    // 根据亮度区间选择颜色
+                    cv::Scalar barColor;
+                    if (i == 0) barColor = {0, 0, 128};      // 很暗 - 深红
+                    else if (i == 1) barColor = {0, 100, 255}; // 暗 - 橙色
+                    else if (i == 2) barColor = {0, 255, 0};   // 正常 - 绿色
+                    else if (i == 3) barColor = {255, 255, 0}; // 亮 - 青色
+                    else barColor = {255, 0, 0};              // 很亮 - 蓝色
+                    
+                    cv::rectangle(show, cv::Point(barX, histY + histHeight - barHeight), 
+                                 cv::Point(barX + barWidth - 2, histY + histHeight), barColor, -1);
+                }
+                
+                // 添加标签 - 更大字体
+                cv::putText(show, "Brightness Distribution", {histX, histY - 15}, cv::FONT_HERSHEY_SIMPLEX, 0.8, {255, 255, 255}, 2);
+                cv::putText(show, "Dark", {histX, histY + histHeight + 25}, cv::FONT_HERSHEY_SIMPLEX, 0.7, {200, 200, 200}, 2);
+                cv::putText(show, "Bright", {histX + histWidth - 60, histY + histHeight + 25}, cv::FONT_HERSHEY_SIMPLEX, 0.7, {200, 200, 200}, 2);
+                
+                // 添加数值标签显示每个区间的像素数量
+                for (int i = 0; i < 5; i++) {
+                    int barWidth = histWidth / 5;
+                    int barX = histX + i * barWidth;
+                    int percentage = (brightnessBins[i] * 100) / (img.rows * img.cols / 100); // 计算百分比
+                    std::string percentText = std::to_string(percentage) + "%";
+                    cv::putText(show, percentText, {barX + barWidth/4, histY + histHeight + 45}, 
+                               cv::FONT_HERSHEY_SIMPLEX, 0.5, {255, 255, 255}, 1);
+                }
+            }
+            
             // 调整显示尺寸至 1080x720
             cv::resize(show, show, cv::Size(PREVIEW_W, PREVIEW_H), 0, 0, cv::INTER_AREA);
             cv::imshow("CameraPreview", show);
@@ -350,50 +538,32 @@ static int run_projector_single_pattern_and_live_tuning(bool useWhitePattern)
                 else std::cout << "参数保存失败" << std::endl;
                 break;
             }
-            case '+': case '=': {
-                if (params.exposureTimeUs <= 0) params.exposureTimeUs = 10000.0f;
-                params.exposureTimeUs += 5556.0f;
+            case '8': {
+                params.exposureTimeUs += 1000.0f;  // 增加曝光时间1ms
+                if (params.exposureTimeUs > 100000.0f) params.exposureTimeUs = 100000.0f; // 最大100ms
                 MV_CC_SetEnumValue(handle, "ExposureAuto", 0);
                 MV_CC_SetFloatValue(handle, "ExposureTime", params.exposureTimeUs);
                 break;
             }
-            case '-': case '_': {
-                if (params.exposureTimeUs <= 0) params.exposureTimeUs = 10000.0f;
-                params.exposureTimeUs -= 5556.0f; if (params.exposureTimeUs < 100.0f) params.exposureTimeUs = 100.0f;
+            case '2': {
+                params.exposureTimeUs -= 1000.0f;  // 减小曝光时间1ms
+                if (params.exposureTimeUs < 100.0f) params.exposureTimeUs = 100.0f; // 最小0.1ms
                 MV_CC_SetEnumValue(handle, "ExposureAuto", 0);
                 MV_CC_SetFloatValue(handle, "ExposureTime", params.exposureTimeUs);
                 break;
             }
-            case 'g': {
-                if (params.gainValue < 0) params.gainValue = 0.0f; params.gainValue += 1.0f;
+            case '6': {
+                params.gainValue += 0.5f;  // 增加增益0.5
+                if (params.gainValue > 30.0f) params.gainValue = 30.0f; // 最大增益30
                 MV_CC_SetEnumValue(handle, "GainAuto", 0);
                 MV_CC_SetFloatValue(handle, "Gain", params.gainValue);
                 break;
             }
-            case 'G': {
-                if (params.gainValue < 0) params.gainValue = 0.0f; params.gainValue -= 1.0f; if (params.gainValue < 0) params.gainValue = 0.0f;
+            case '4': {
+                params.gainValue -= 0.5f;  // 减小增益0.5
+                if (params.gainValue < 0.0f) params.gainValue = 0.0f;   // 最小增益0
                 MV_CC_SetEnumValue(handle, "GainAuto", 0);
                 MV_CC_SetFloatValue(handle, "Gain", params.gainValue);
-                break;
-            }
-            case 'f': {
-                if (params.frameRate < 0) params.frameRate = 5.0f; params.frameRate += 1.0f;
-                MV_CC_SetFloatValue(handle, "AcquisitionFrameRate", params.frameRate);
-                break;
-            }
-            case 'F': {
-                if (params.frameRate < 0) params.frameRate = 5.0f; params.frameRate -= 1.0f; if (params.frameRate < 1.0f) params.frameRate = 1.0f;
-                MV_CC_SetFloatValue(handle, "AcquisitionFrameRate", params.frameRate);
-                break;
-            }
-            case 't': {
-                params.triggerDelayUs += 100;
-                MV_CC_SetFloatValue(handle, "TriggerDelay", static_cast<float>(params.triggerDelayUs));
-                break;
-            }
-            case 'T': {
-                params.triggerDelayUs -= 100; if (params.triggerDelayUs < 0) params.triggerDelayUs = 0;
-                MV_CC_SetFloatValue(handle, "TriggerDelay", static_cast<float>(params.triggerDelayUs));
                 break;
             }
             default: break;
@@ -500,15 +670,32 @@ int main()
     SetConsoleOutputCP(CP_UTF8);
     SetConsoleCP(CP_UTF8);
 #endif
+    
+    // 禁用OpenCV的详细日志输出
+    cv::utils::logging::setLogLevel(cv::utils::logging::LOG_LEVEL_WARNING);
     std::cout << "\n请选择要运行的功能:" << std::endl;
     std::cout << "  1) 全白投影+单次拍照保存" << std::endl;
     std::cout << "  2) 投影单张(全白)并启动相机实时预览可调参" << std::endl;
     std::cout << "  3) 投影单张(垂直条纹)并启动相机实时预览可调参" << std::endl;
+    std::cout << "  4) 投影单张(水平条纹)并启动相机实时预览可调参" << std::endl;
     std::cout << "请输入序号并回车: ";
     int choice = 0;
     if (!(std::cin >> choice)) {
         std::cerr << "输入无效" << std::endl;
         return 1;
+    }
+
+    int frequency = 15; // 默认频率
+    if (choice == 3 || choice == 4) {
+        std::cout << "请输入条纹频率 (默认15): ";
+        int inputFreq;
+        if (std::cin >> inputFreq && inputFreq > 0 && inputFreq <= 100) {
+            frequency = inputFreq;
+        } else {
+            std::cout << "使用默认频率: " << frequency << std::endl;
+            std::cin.clear();
+            std::cin.ignore(10000, '\n');
+        }
     }
 
     int ret = 1;
@@ -517,10 +704,13 @@ int main()
             ret = run_projector_white_capture();
             break;
         case 2:
-            ret = run_projector_single_pattern_and_live_tuning(true);
+            ret = run_projector_single_pattern_and_live_tuning(0); // 全白
             break;
         case 3:
-            ret = run_projector_single_pattern_and_live_tuning(false);
+            ret = run_projector_single_pattern_and_live_tuning(1, frequency); // 垂直条纹
+            break;
+        case 4:
+            ret = run_projector_single_pattern_and_live_tuning(2, frequency); // 水平条纹
             break;
         default:
             std::cerr << "未知选项: " << choice << std::endl;
