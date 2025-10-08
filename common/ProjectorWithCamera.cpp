@@ -579,8 +579,10 @@ bool runVerticalProjectStepAndCapture(
 
         // 创建输出目录
         std::string saveDir = outputDir.empty() ? (std::filesystem::current_path() / "images").string() : outputDir;
+        std::cout << "输出目录: " << saveDir << std::endl;
         try { 
             std::filesystem::create_directories(saveDir); 
+            std::cout << "输出目录已创建/确认存在" << std::endl;
         } catch (...) {
             std::cerr << "[垂直] 创建输出目录失败: " << saveDir << std::endl;
             projector->disConnect();
@@ -588,12 +590,17 @@ bool runVerticalProjectStepAndCapture(
         }
 
         // 生成垂直条纹（前N张）
+        std::cout << "\n=== 生成垂直条纹图像 ===" << std::endl;
+        std::cout << "图像尺寸: " << deviceWidth << "x" << deviceHeight << std::endl;
+        std::cout << "条纹参数: 频率=" << frequency << ", 强度=" << intensity 
+                  << ", 偏移=" << offset << ", 步数=" << steps << std::endl;
         auto imgs = generatePhaseShiftFringeImages(deviceWidth, deviceHeight, frequency, intensity, offset, noiseStd, steps);
         if ((int)imgs.size() != steps * 2) { 
             std::cerr << u8"垂直条纹：生成图像失败" << std::endl; 
             projector->disConnect();
             return false;
         }
+        std::cout << "成功生成 " << steps << " 张垂直条纹图像" << std::endl;
         
         std::vector<PatternOrderSet> patternSets(1);
         patternSets[0].exposureTime_ = 4000;
@@ -606,27 +613,55 @@ bool runVerticalProjectStepAndCapture(
         patternSets[0].patternArrayCounts_ = deviceWidth;
         patternSets[0].imgs_.assign(imgs.begin(), imgs.begin() + steps);
 
-        std::cout << "装载图案表..." << std::endl;
+        // ===== 关键修复：彻底清除旧图案并装载新图案 =====
+        std::cout << "正在清除投影仪旧图案表..." << std::endl;
+        projector->stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        // 完全断开连接以清除缓存
+        projector->disConnect();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        
+        // 重新连接并装载新图案
+        std::cout << "重新连接投影仪并装载新图案表..." << std::endl;
+        if (!projector->connect()) { 
+            std::cerr << "重新连接投影仪失败" << std::endl;
+            projector->disConnect(); 
+            return false; 
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        // 装载新的图案数据（这会写入Flash）
+        std::cout << "装载图案表（参数：频率=" << frequency << ", 强度=" << intensity 
+                  << ", 偏移=" << offset << "）..." << std::endl;
         if (!projector->populatePatternTableData(patternSets)) {
             std::cerr << "装载图案表失败" << std::endl;
             projector->disConnect(); 
             return false;
         }
-
-        // 投影仪稳定流程
-        std::cout << "执行投影仪稳定流程..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        
+        // 投影仪稳定流程：二次确认图案已加载
+        std::cout << "执行投影仪稳定流程（二次验证图案）..." << std::endl;
         projector->stop();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            projector->disConnect();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        projector->disConnect();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        
         if (!projector->connect()) { 
+            std::cerr << "二次连接投影仪失败" << std::endl;
             projector->disConnect(); 
             return false; 
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        // 再次装载确保图案完全写入Flash
         if (!projector->populatePatternTableData(patternSets)) { 
+            std::cerr << "二次装载图案表失败" << std::endl;
             projector->disConnect(); 
             return false; 
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
         projector->setLEDCurrent(0.9, 0.9, 0.9);
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -795,8 +830,10 @@ bool runHorizontalProjectStepAndCapture(
 
         // 创建输出目录
         std::string saveDir = outputDir.empty() ? (std::filesystem::current_path() / "images").string() : outputDir;
+        std::cout << "输出目录: " << saveDir << std::endl;
         try { 
             std::filesystem::create_directories(saveDir); 
+            std::cout << "输出目录已创建/确认存在" << std::endl;
         } catch (...) {
             std::cerr << "创建输出目录失败: " << saveDir << std::endl;
             projector->disConnect();
@@ -804,12 +841,17 @@ bool runHorizontalProjectStepAndCapture(
         }
 
         // 生成水平条纹（后N张）
+        std::cout << "\n=== 生成水平条纹图像 ===" << std::endl;
+        std::cout << "图像尺寸: " << deviceWidth << "x" << deviceHeight << std::endl;
+        std::cout << "条纹参数: 频率=" << frequency << ", 强度=" << intensity 
+                  << ", 偏移=" << offset << ", 步数=" << steps << std::endl;
         auto imgs = generatePhaseShiftFringeImages(deviceWidth, deviceHeight, frequency, intensity, offset, noiseStd, steps);
         if ((int)imgs.size() != steps * 2) { 
             std::cerr << "生成图像失败" << std::endl; 
             projector->disConnect();
             return false;
         }
+        std::cout << "成功生成 " << steps << " 张水平条纹图像" << std::endl;
         
         std::vector<PatternOrderSet> patternSets(1);
         patternSets[0].exposureTime_ = 4000;
@@ -822,26 +864,55 @@ bool runHorizontalProjectStepAndCapture(
         patternSets[0].patternArrayCounts_ = deviceWidth;
         patternSets[0].imgs_.assign(imgs.begin() + steps, imgs.end());
 
-        std::cout << "装载图案表..." << std::endl;
-        if (!projector->populatePatternTableData(patternSets)) { 
+        // ===== 彻底清除旧图案并装载新图案 =====
+        std::cout << "正在清除投影仪旧图案表..." << std::endl;
+        projector->stop();
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        // 完全断开连接以清除缓存
+        projector->disConnect();
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        
+        // 重新连接并装载新图案
+        std::cout << "重新连接投影仪并装载新图案表..." << std::endl;
+        if (!projector->connect()) { 
+            std::cerr << "重新连接投影仪失败" << std::endl;
             projector->disConnect(); 
             return false; 
         }
-
-        // 投影仪稳定流程
-        std::cout << "执行投影仪稳定流程..." << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        // 装载新的图案数据（这会写入Flash）
+        std::cout << "装载图案表（参数：频率=" << frequency << ", 强度=" << intensity 
+                  << ", 偏移=" << offset << "）..." << std::endl;
+        if (!projector->populatePatternTableData(patternSets)) {
+            std::cerr << "装载图案表失败" << std::endl;
+            projector->disConnect(); 
+            return false; 
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        
+        // 投影仪稳定流程：二次确认图案已加载
+        std::cout << "执行投影仪稳定流程（二次验证图案）..." << std::endl;
         projector->stop();
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         projector->disConnect();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+        
         if (!projector->connect()) { 
+            std::cerr << "二次连接投影仪失败" << std::endl;
             projector->disConnect(); 
             return false; 
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        
+        // 再次装载确保图案完全写入Flash
         if (!projector->populatePatternTableData(patternSets)) { 
+            std::cerr << "二次装载图案表失败" << std::endl;
             projector->disConnect(); 
             return false; 
         }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
         projector->setLEDCurrent(0.9, 0.9, 0.9);
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -971,23 +1042,42 @@ int main() {
     std::cout << "相机参数将从保存的配置文件中读取（如果存在）" << std::endl;
     std::cout << std::endl;
     
-    // 示例：相机序列号与保存目录可按需填写；序列号传 "NULL" 表示自动选择第一台
-    const std::string cameraSerial = "NULL"; // 或者例如 "DA1015150"
-    const std::string saveDir = "images";    // 图像保存目录
+    // ====== 用户可修改的参数配置 ======
+    // 相机配置
+    const std::string cameraSerial = "NULL";  // 相机序列号，"NULL"表示自动选择第一台
+    const std::string saveDir = "images";     // 图像保存目录（可修改，如 "output" 或 "E:/data"）
     
-    /*
-    这里的参数分别是：projectorModel：投影仪型号，deviceWidth：投影宽度，deviceHeight：投影高度，steps：相移步数，frequency：条纹频率，intensity：条纹强度，
-    offset：亮度偏移，noiseStd：噪声标准差，cameraSerial：相机序列号，saveDir：图像保存目录，useSavedParams：是否使用保存的相机参数
-    */
+    // 投影仪配置
+    const std::string projectorModel = "DLP4710";  // 投影仪型号
+    const int deviceWidth = 1920;                   // 投影宽度
+    const int deviceHeight = 1080;                  // 投影高度
+    
+    // 条纹参数配置（修改这些参数会改变投影图案）
+    const int steps = 4;            // 相移步数（4步对应0°,90°,180°,270°）
+    const int frequency = 15;       // 条纹频率（修改此值会改变条纹疏密）
+    const int intensity = 100;      // 条纹强度/对比度（0-128，修改此值会改变条纹明暗对比）
+    const int offset = 128;         // 亮度偏移/平均灰度（0-255，修改此值会改变整体亮度）
+    const double noiseStd = 0.0;    // 噪声标准差（通常为0）
+    
+    std::cout << "\n====== 当前参数配置 ======" << std::endl;
+    std::cout << "投影仪型号: " << projectorModel << std::endl;
+    std::cout << "投影尺寸: " << deviceWidth << "x" << deviceHeight << std::endl;
+    std::cout << "保存目录: " << saveDir << std::endl;
+    std::cout << "条纹频率: " << frequency << " (值越大，条纹越密)" << std::endl;
+    std::cout << "条纹强度: " << intensity << " (范围0-128，值越大对比度越强)" << std::endl;
+    std::cout << "亮度偏移: " << offset << " (范围0-255，控制平均亮度)" << std::endl;
+    std::cout << "相移步数: " << steps << " 步" << std::endl;
+    std::cout << "==========================\n" << std::endl;
+    
+    // 执行垂直条纹投影与拍摄
     bool successV = slmaster_demo::runVerticalProjectStepAndCapture(
-        "DLP4710", 1920, 1080, 4, 15, 100, 128, 0.0, cameraSerial, saveDir, true);
+        projectorModel, deviceWidth, deviceHeight, steps, frequency, intensity, 
+        offset, noiseStd, cameraSerial, saveDir, true);
 
-    /*
-    这里的参数分别是：projectorModel：投影仪型号，deviceWidth：投影宽度，deviceHeight：投影高度，steps：相移步数，frequency：条纹频率，intensity：条纹强度，
-    offset：亮度偏移，noiseStd：噪声标准差，cameraSerial：相机序列号，saveDir：图像保存目录，useSavedParams：是否使用保存的相机参数
-    */
+    // 执行水平条纹投影与拍摄
     bool successH = slmaster_demo::runHorizontalProjectStepAndCapture(
-        "DLP4710", 1920, 1080, 4, 15, 100, 128, 0.0, cameraSerial, saveDir, true);
+        projectorModel, deviceWidth, deviceHeight, steps, frequency, intensity, 
+        offset, noiseStd, cameraSerial, saveDir, true);
 
     if (successV && successH) {
         std::cout << u8"投影仪与相机协作演示完成！" << std::endl;

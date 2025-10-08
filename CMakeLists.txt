@@ -56,60 +56,60 @@ target_link_libraries(
 
 # ==================== 可执行文件配置 ====================
 # 创建第一个可执行文件：ProjectorTest.cpp
-add_executable(projectorTest ${CMAKE_CURRENT_SOURCE_DIR}/common/ProjectorTest.cpp)
+add_executable(ProjectorTest ${CMAKE_CURRENT_SOURCE_DIR}/common/ProjectorTest.cpp)
 
 # 设置可执行文件的包含目录
-target_include_directories(projectorTest PRIVATE 
+target_include_directories(ProjectorTest PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/common 
     ${CMAKE_CURRENT_SOURCE_DIR}/module/projector_dlpc_api/include
     ${MVS_INCLUDES_DIR}
 )
 
 # 链接必要的库
-target_link_libraries(projectorTest 
+target_link_libraries(ProjectorTest 
     projectorDlpcApi
     ${OpenCV_LIBRARIES}
     ${MVS_CAMERA_CONTROL_LIB}
 )
 
 # 设置C++标准
-target_compile_features(projectorTest PRIVATE cxx_std_17)
+target_compile_features(ProjectorTest PRIVATE cxx_std_17)
 if (MSVC)
-    target_compile_options(projectorTest PRIVATE /utf-8)
+    target_compile_options(ProjectorTest PRIVATE /utf-8)
 endif()
 
 # 创建第二个可执行文件：ProjectorWithCamera.cpp（投影仪与相机协作流程示例）
-add_executable(projectorWithCreame ${CMAKE_CURRENT_SOURCE_DIR}/common/ProjectorWithCamera.cpp)
+add_executable(ProjectorWithCamera ${CMAKE_CURRENT_SOURCE_DIR}/common/ProjectorWithCamera.cpp)
 
 # 设置可执行文件的包含目录
-target_include_directories(projectorWithCreame PRIVATE 
+target_include_directories(ProjectorWithCamera PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/common 
     ${CMAKE_CURRENT_SOURCE_DIR}/module/projector_dlpc_api/include
     ${MVS_INCLUDES_DIR}
 )
 
 # 链接必要的库
-target_link_libraries(projectorWithCreame 
+target_link_libraries(ProjectorWithCamera 
     projectorDlpcApi
     ${OpenCV_LIBRARIES}
     ${MVS_CAMERA_CONTROL_LIB}
 )
 # 创建第三个可执行文件：CameraTest.cpp（相机连接与拍摄测试）
-add_executable(cameraTest ${CMAKE_CURRENT_SOURCE_DIR}/common/CameraTest.cpp)
+add_executable(CameraTest ${CMAKE_CURRENT_SOURCE_DIR}/common/CameraTest.cpp)
 
-target_include_directories(cameraTest PRIVATE 
+target_include_directories(CameraTest PRIVATE 
     ${CMAKE_CURRENT_SOURCE_DIR}/common 
     ${MVS_INCLUDES_DIR}
 )
 
-target_link_libraries(cameraTest 
+target_link_libraries(CameraTest 
     ${OpenCV_LIBRARIES}
     ${MVS_CAMERA_CONTROL_LIB}
 )
 
-target_compile_features(cameraTest PRIVATE cxx_std_17)
+target_compile_features(CameraTest PRIVATE cxx_std_17)
 if (MSVC)
-    target_compile_options(cameraTest PRIVATE /utf-8)
+    target_compile_options(CameraTest PRIVATE /utf-8)
 endif()
 
 # 创建第四个可执行文件：Projector_Crmera_test.cpp（全白投影+相机拍照保存）
@@ -146,45 +146,45 @@ set_target_properties(Projector_Crmera_test PROPERTIES
 )
 
 # 设置C++标准
-target_compile_features(projectorWithCreame PRIVATE cxx_std_17)
+target_compile_features(ProjectorWithCamera PRIVATE cxx_std_17)
 if (MSVC)
-    target_compile_options(projectorWithCreame PRIVATE /utf-8)
+    target_compile_options(ProjectorWithCamera PRIVATE /utf-8)
 endif()
 
 # ==================== 复制DLL文件 ====================
 # 确保运行时能找到cyusbserial.dll
-add_custom_command(TARGET projectorTest POST_BUILD
+add_custom_command(TARGET ProjectorTest POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${CMAKE_CURRENT_SOURCE_DIR}/module/projector_dlpc_api/third_party/cyusbserial/cyusbserial.dll
-    $<TARGET_FILE_DIR:projectorTest>
+    $<TARGET_FILE_DIR:ProjectorTest>
     COMMENT "Copying cyusbserial.dll to output directory"
 )
 
-add_custom_command(TARGET projectorWithCreame POST_BUILD
+add_custom_command(TARGET ProjectorWithCamera POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${CMAKE_CURRENT_SOURCE_DIR}/module/projector_dlpc_api/third_party/cyusbserial/cyusbserial.dll
-    $<TARGET_FILE_DIR:projectorWithCreame>
+    $<TARGET_FILE_DIR:ProjectorWithCamera>
     COMMENT "Copying cyusbserial.dll to output directory"
 )
 
-add_custom_command(TARGET cameraTest POST_BUILD
+add_custom_command(TARGET CameraTest POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
     ${CMAKE_CURRENT_SOURCE_DIR}/module/projector_dlpc_api/third_party/cyusbserial/cyusbserial.dll
-    $<TARGET_FILE_DIR:cameraTest>
+    $<TARGET_FILE_DIR:CameraTest>
     COMMENT "Copying cyusbserial.dll to output directory"
 )
 
 # ==================== 设置运行时DLL搜索路径 ====================
 # 为可执行文件设置额外的DLL搜索路径
-set_target_properties(projectorTest PROPERTIES
+set_target_properties(ProjectorTest PROPERTIES
     VS_DEBUGGER_ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/module/projector_dlpc_api/third_party/cyusbserial;$ENV{PATH}"
 )
 
-set_target_properties(projectorWithCreame PROPERTIES
+set_target_properties(ProjectorWithCamera PROPERTIES
     VS_DEBUGGER_ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/module/projector_dlpc_api/third_party/cyusbserial;$ENV{PATH}"
 )
 
-set_target_properties(cameraTest PROPERTIES
+set_target_properties(CameraTest PROPERTIES
     VS_DEBUGGER_ENVIRONMENT "PATH=${CMAKE_CURRENT_SOURCE_DIR}/module/projector_dlpc_api/third_party/cyusbserial;$ENV{PATH}"
 )
 
