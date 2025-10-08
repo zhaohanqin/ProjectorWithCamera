@@ -648,7 +648,28 @@ bool runVerticalProjectStepAndCapture(
         // 暂停投影，准备步进控制
         std::cout << "暂停投影，准备步进控制..." << std::endl;
         projector->pause();
-        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+
+        // 获取当前帧索引并定位到270°（第steps-1帧）
+        int currentFrameIndex = projector->getFlashImgsNum();
+        int targetFrameIndex = steps - 1; // 目标是270°（最后一帧）
+        std::cout << "当前帧索引: " << currentFrameIndex << ", 目标帧索引: " << targetFrameIndex << " (270°)" << std::endl;
+        
+        // 计算需要步进的次数（循环步进）
+        int stepsNeeded = (targetFrameIndex - currentFrameIndex + steps) % steps;
+        if (stepsNeeded > 0) {
+            std::cout << "需要步进 " << stepsNeeded << " 次到达270°位置..." << std::endl;
+            for (int s = 0; s < stepsNeeded; ++s) {
+                projector->step();
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            std::cout << "已定位到270°，准备开始采集" << std::endl;
+        } else {
+            std::cout << "已经在270°位置，无需步进" << std::endl;
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
 
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10,
@@ -658,12 +679,13 @@ bool runVerticalProjectStepAndCapture(
         // 主循环：开始拍摄
         std::cout << "\n=== 开始垂直条纹拍摄 ===" << std::endl;
         std::cout << "步数: " << steps << ", 步进等待时间: " << waitMs << "ms" << std::endl;
+        std::cout << "采集策略: 从270°位置开始，每次先step()再拍摄，确保采集顺序为 0°, 90°, 180°, 270°" << std::endl;
 
         bool allSuccess = true;
         for (int i = 0; i < steps; ++i) {
-            std::cout << "\n--- 第 " << (i+1) << "/" << steps << " 帧 ---" << std::endl;
+            std::cout << "\n--- 第 " << (i+1) << "/" << steps << " 帧 (相位: " << (i * 90) << "°) ---" << std::endl;
             
-            // 投影仪步进
+            // 投影仪步进（从270°步进到下一帧，第一次step后到达0°）
             if (!projector->step()) { 
                 std::cerr << "步进失败" << std::endl; 
                 allSuccess = false;
@@ -840,7 +862,28 @@ bool runHorizontalProjectStepAndCapture(
         // 暂停投影，准备步进控制
         std::cout << "暂停投影，准备步进控制..." << std::endl;
         projector->pause();
-        std::this_thread::sleep_for(std::chrono::milliseconds(5000));
+        std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+
+        // 获取当前帧索引并定位到270°（第steps-1帧）
+        int currentFrameIndex = projector->getFlashImgsNum();
+        int targetFrameIndex = steps - 1; // 目标是270°（最后一帧）
+        std::cout << "当前帧索引: " << currentFrameIndex << ", 目标帧索引: " << targetFrameIndex << " (270°)" << std::endl;
+        
+        // 计算需要步进的次数（循环步进）
+        int stepsNeeded = (targetFrameIndex - currentFrameIndex + steps) % steps;
+        if (stepsNeeded > 0) {
+            std::cout << "需要步进 " << stepsNeeded << " 次到达270°位置..." << std::endl;
+            for (int s = 0; s < stepsNeeded; ++s) {
+                projector->step();
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+            std::cout << "已定位到270°，准备开始采集" << std::endl;
+        } else {
+            std::cout << "已经在270°位置，无需步进" << std::endl;
+        }
+        
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10, 
@@ -849,12 +892,13 @@ bool runHorizontalProjectStepAndCapture(
         // 主循环：开始拍摄
         std::cout << "\n=== 开始水平条纹拍摄 ===" << std::endl;
         std::cout << "步数: " << steps << ", 步进等待时间: " << waitMs << "ms" << std::endl;
+        std::cout << "采集策略: 从270°位置开始，每次先step()再拍摄，确保采集顺序为 0°, 90°, 180°, 270°" << std::endl;
         
         bool allSuccess = true;
         for (int i = 0; i < steps; ++i) {
-            std::cout << "\n--- 第 " << (i+1) << "/" << steps << " 帧 ---" << std::endl;
+            std::cout << "\n--- 第 " << (i+1) << "/" << steps << " 帧 (相位: " << (i * 90) << "°) ---" << std::endl;
             
-            // 投影仪步进
+            // 投影仪步进（从270°步进到下一帧，第一次step后到达0°）
             if (!projector->step()) { 
                 std::cerr << "步进失败" << std::endl; 
                 allSuccess = false;

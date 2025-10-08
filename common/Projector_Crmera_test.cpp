@@ -283,7 +283,7 @@ static int run_projector_single_pattern_and_live_tuning(int patternType, int fre
         return 1;
     }
     
-    // 执行投影仪稳定流程（参考ProjectorWithCamera.cpp的稳定方法）
+    // 执行投影仪稳定流程（完全按照ProjectorWithCamera.cpp的稳定方法）
     std::cout << "执行投影仪稳定流程..." << std::endl;
     projector->stop();
     std::this_thread::sleep_for(std::chrono::milliseconds(500));
@@ -301,27 +301,19 @@ static int run_projector_single_pattern_and_live_tuning(int patternType, int fre
         return 1;
     }
     
-    // 设置LED电流并等待稳定（增加稳定时间减少频闪）
-    std::cout << "设置LED电流并等待稳定..." << std::endl;
+    // 设置LED电流（与ProjectorWithCamera.cpp一致：等待500ms）
+    std::cout << "设置LED电流..." << std::endl;
     projector->setLEDCurrent(0.9, 0.9, 0.9);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // 增加到1秒
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     
-    // 验证LED电流设置
-    double red, green, blue;
-    if (projector->getLEDCurrent(red, green, blue)) {
-        std::cout << "LED电流设置: R=" << red << " G=" << green << " B=" << blue << std::endl;
-    } else {
-        std::cout << "警告: 无法验证LED电流设置" << std::endl;
-    }
-    
-    // 启动连续投影模式
+    // 启动连续投影模式（关键：等待2000ms让投影仪完全稳定）
     std::cout << "启动连续投影模式..." << std::endl;
     if (!projector->project(true)) {
         std::cerr << "启动连续投影模式失败" << std::endl;
         projector->disConnect();
         return 1;
     }
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // 关键：充分等待
     
     // 停止并重新启动以确保稳定
     projector->stop();
@@ -334,36 +326,24 @@ static int run_projector_single_pattern_and_live_tuning(int patternType, int fre
     }
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     
-    // 步进到第一帧
-    std::cout << "步进到第一帧..." << std::endl;
-    if (!projector->step()) {
-        std::cerr << "步进失败" << std::endl;
-        projector->stop();
-        projector->disConnect();
-        return 1;
+    // 关键修改：先暂停投影，让投影仪停在连续投影的当前帧（不要先step）
+    std::cout << "暂停投影，准备步进控制..." << std::endl;
+    projector->pause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // 等待pause生效
+    
+    // 验证LED电流设置（调试信息）
+    double red, green, blue;
+    if (projector->getLEDCurrent(red, green, blue)) {
+        std::cout << "LED电流: R=" << red << " G=" << green << " B=" << blue << std::endl;
     }
     
-    // 暂停以避免自动循环，保持当前帧稳定显示
-    std::cout << "暂停投影，保持当前帧稳定显示..." << std::endl;
-    projector->pause();
-    
-    // 关键：增加更长的稳定时间（减少频闪）
-    std::cout << "等待投影完全稳定（8秒）..." << std::endl;
-    std::this_thread::sleep_for(std::chrono::milliseconds(8000));
-    
-    // 额外的暂停确认，确保投影仪完全稳定
-    std::cout << "确认投影仪暂停状态..." << std::endl;
-    projector->pause(); // 再次确认暂停状态
+    // 获取当前帧索引（如果需要定位，可以在这里step）
+    // 对于单张图案，pause后就已经显示稳定，无需额外step
+    std::cout << "投影仪已暂停在当前帧，准备实时预览..." << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     
     std::cout << "投影仪正在显示" << patternName << std::endl;
     std::cout << "图案尺寸: " << W << "x" << H << std::endl;
-    
-    // 验证投影仪状态
-    double currentRed, currentGreen, currentBlue;
-    if (projector->getLEDCurrent(currentRed, currentGreen, currentBlue)) {
-        std::cout << "当前LED电流: R=" << currentRed << " G=" << currentGreen << " B=" << currentBlue << std::endl;
-    }
 
     // 2) 相机实时预览并允许调参
     CameraParams params{};
@@ -406,7 +386,7 @@ static int run_projector_single_pattern_and_live_tuning(int patternType, int fre
     std::cout << "  2: 曝光时间 -1000us" << std::endl;
     std::cout << "  6: 增益 +0.5" << std::endl;
     std::cout << "  4: 增益 -0.5" << std::endl;
-    std::cout << "\n投影仪状态：正在连续投影" << patternName << std::endl;
+    std::cout << "\n投影仪状态：已暂停在" << patternName << "（稳定显示，无闪烁）" << std::endl;
 
     const int PREVIEW_W = 1080;
     const int PREVIEW_H = 720;
@@ -617,36 +597,58 @@ static int run_projector_white_capture()
 
     std::vector<PatternOrderSet> patternSets{set};
 
-    // 设置LED电流（亮白）
-    projector->setLEDCurrent(0.95, 0.95, 0.95);
-
-    // 加载并进入非连续步进模式
+    // 装载图案数据
     if (!projector->populatePatternTableData(patternSets)) {
         std::cerr << "装载全白图案失败" << std::endl;
         projector->disConnect();
         return 1;
     }
-    if (!projector->project(false)) { // 非连续
-        std::cerr << "进入非连续步进模式失败" << std::endl;
+
+    // 执行投影仪稳定流程（按照ProjectorWithCamera.cpp的方法）
+    std::cout << "执行投影仪稳定流程..." << std::endl;
+    projector->stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    projector->disConnect();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    if (!projector->connect()) {
+        std::cerr << "重新连接投影仪失败" << std::endl;
+        return 1;
+    }
+    
+    if (!projector->populatePatternTableData(patternSets)) {
+        std::cerr << "重新装载图案失败" << std::endl;
         projector->disConnect();
         return 1;
     }
-
-    // 步进一步显示白图，随后暂停以保持稳定
-    if (!projector->step()) {
-        std::cerr << "步进显示白图失败" << std::endl;
-        projector->stop();
+    
+    // 设置LED电流
+    projector->setLEDCurrent(0.95, 0.95, 0.95);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    // 启动连续投影模式（关键：先连续投影让投影仪稳定）
+    std::cout << "启动连续投影模式..." << std::endl;
+    if (!projector->project(true)) {
+        std::cerr << "启动连续投影失败" << std::endl;
         projector->disConnect();
         return 1;
     }
-
-    // 等待投影稳定
-    int wait_ms = (set.preExposureTime_ + set.exposureTime_ + set.postExposureTime_) / 1000 + 500;
-    if (wait_ms < 1000) wait_ms = 1000;
-    std::this_thread::sleep_for(std::chrono::milliseconds(wait_ms));
-
-    // 暂停，确保停留不闪烁
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    
+    projector->stop();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    if (!projector->project(true)) {
+        std::cerr << "重新启动连续投影失败" << std::endl;
+        projector->disConnect();
+        return 1;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    // 暂停投影（关键：先暂停，不要先step）
+    std::cout << "暂停投影..." << std::endl;
     projector->pause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
     // 相机拍照并保存
     std::filesystem::create_directories("images");

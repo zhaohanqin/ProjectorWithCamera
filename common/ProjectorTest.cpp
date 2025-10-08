@@ -844,20 +844,30 @@ void testProjectorStepWithGeneratedVerticalFringes() {
     assertTrue(isSucess, "重新加载图案数据成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
 
-    // 设置LED并启动连续投影模式
+    // 设置LED并启动连续投影模式（完全按照ProjectorWithCamera.cpp的稳定方法）
     isSucess = projectorDlpcApi->setLEDCurrent(0.9, 0.9, 0.9);
     assertTrue(isSucess, "LED亮度设置成功");
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
     std::cout << "启动连续投影模式..." << std::endl;
     isSucess = projectorDlpcApi->project(true);
     assertTrue(isSucess, "连续投影模式启动成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // 关键：等待2000ms
     
-    // 等待投影仪启动稳定
+    // 停止并重新启动以确保稳定
+    projectorDlpcApi->stop();
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     
-    // 暂停以准备步进控制
+    isSucess = projectorDlpcApi->project(true);
+    assertTrue(isSucess, "重新启动连续投影成功");
+    if (!isSucess) { projectorDlpcApi->disConnect(); return; }
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    // 暂停投影，准备步进控制（关键：先暂停，不要先step）
     std::cout << "暂停投影，准备步进控制..." << std::endl;
     projectorDlpcApi->pause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
     const int totalFrames = steps;
     std::cout << "开始步进投影垂直条纹，总共 " << totalFrames << " 帧..." << std::endl;
@@ -973,24 +983,31 @@ void testProjectorStepWithGeneratedHorizontalFringes() {
     assertTrue(isSucess, "重新加载图案数据成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
 
-    // 设置LED并进入投影模式
+    // 设置LED并启动连续投影模式（完全按照ProjectorWithCamera.cpp的稳定方法）
     isSucess = projectorDlpcApi->setLEDCurrent(0.9, 0.9, 0.9);
     assertTrue(isSucess, "LED亮度设置成功");
-    std::cout << "开始连续投影模式..." << std::endl;
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    
+    std::cout << "启动连续投影模式..." << std::endl;
     isSucess = projectorDlpcApi->project(true);
-    assertTrue(isSucess, "连续投影模式开始成功");
+    assertTrue(isSucess, "连续投影模式启动成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // 关键：等待2000ms
 
-    // 停止并重新开始，作为最终校验
-    std::cout << "停止当前投影..." << std::endl;
+    // 停止并重新启动以确保稳定
+    std::cout << "停止并重新启动投影..." << std::endl;
     projectorDlpcApi->stop();
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-    std::cout << "重新开始投影模式..." << std::endl;
+    
     isSucess = projectorDlpcApi->project(true);
-    assertTrue(isSucess, "投影模式重新开始成功");
+    assertTrue(isSucess, "重新启动连续投影成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    
+    // 暂停投影，准备步进控制（关键：先暂停，不要先step）
+    std::cout << "暂停投影，准备步进控制..." << std::endl;
+    projectorDlpcApi->pause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
 
     const int totalFrames = steps;
     std::cout << "开始步进投影水平条纹，总共 " << totalFrames << " 帧..." << std::endl;
@@ -1106,39 +1123,37 @@ void testProjectorStepWithGeneratedVerticalFringesKeyTrigger() {
     assertTrue(isSucess, "重新加载图案数据成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
 
-    // 设置LED电流并等待稳定（增加稳定时间减少频闪）
-    std::cout << "设置LED电流并等待稳定..." << std::endl;
+    // 设置LED电流（完全按照ProjectorWithCamera.cpp的稳定方法）
+    std::cout << "设置LED电流..." << std::endl;
     projectorDlpcApi->setLEDCurrent(0.9, 0.9, 0.9);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // 增加到1秒
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     
-    // 验证LED电流设置
-    double red, green, blue;
-    if (projectorDlpcApi->getLEDCurrent(red, green, blue)) {
-        std::cout << "LED电流设置: R=" << red << " G=" << green << " B=" << blue << std::endl;
-    } else {
-        std::cout << "警告: 无法验证LED电流设置" << std::endl;
-    }
-    
-    // 启动连续投影模式
+    // 启动连续投影模式（关键：等待2000ms让投影仪完全稳定）
     std::cout << "启动连续投影模式..." << std::endl;
     isSucess = projectorDlpcApi->project(true);
     assertTrue(isSucess, "连续投影模式启动成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // 关键：充分等待
     
     // 停止并重新启动以确保稳定
     projectorDlpcApi->stop();
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     
     isSucess = projectorDlpcApi->project(true);
-    assertTrue(isSucess, "重新启动连续投影模式成功");
+    assertTrue(isSucess, "重新启动连续投影成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     
-    // 暂停投影，准备步进控制
+    // 暂停投影，准备步进控制（关键：先暂停，不要先step）
     std::cout << "暂停投影，准备步进控制..." << std::endl;
     projectorDlpcApi->pause();
-    std::this_thread::sleep_for(std::chrono::milliseconds(5000)); // 增加到5秒
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    
+    // 验证LED电流设置（调试信息）
+    double red, green, blue;
+    if (projectorDlpcApi->getLEDCurrent(red, green, blue)) {
+        std::cout << "LED电流: R=" << red << " G=" << green << " B=" << blue << std::endl;
+    }
 
     const int totalFrames = steps;
     std::cout << "开始按键触发步进投影垂直条纹，总共 " << totalFrames << " 帧..." << std::endl;
@@ -1300,20 +1315,12 @@ void testProjectorWhitePatternProjection() {
     }
     std::cout << "✓ 图案数据重新加载成功" << std::endl;
     
-    // 设置LED电流并等待稳定（完全按照Projector_Crmera_test.cpp）
-    std::cout << "➤ 设置LED电流并等待稳定..." << std::endl;
+    // 设置LED电流（完全按照ProjectorWithCamera.cpp的稳定方法）
+    std::cout << "➤ 设置LED电流..." << std::endl;
     projector->setLEDCurrent(0.9, 0.9, 0.9);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // 增加到1秒
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     
-    // 验证LED电流设置（完全按照Projector_Crmera_test.cpp）
-    double red, green, blue;
-    if (projector->getLEDCurrent(red, green, blue)) {
-        std::cout << "✓ LED电流设置: R=" << red << " G=" << green << " B=" << blue << std::endl;
-    } else {
-        std::cout << "警告: 无法验证LED电流设置" << std::endl;
-    }
-    
-    // 启动连续投影模式（关键：使用project(true)而不是false！）
+    // 启动连续投影模式（关键：等待2000ms让投影仪完全稳定）
     std::cout << "➤ 启动连续投影模式..." << std::endl;
     if (!projector->project(true)) {
         std::cerr << "启动连续投影模式失败" << std::endl;
@@ -1322,9 +1329,9 @@ void testProjectorWhitePatternProjection() {
         return;
     }
     std::cout << "✓ 连续投影模式启动成功" << std::endl;
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // 关键：充分等待
     
-    // 停止并重新启动以确保稳定（完全按照Projector_Crmera_test.cpp）
+    // 停止并重新启动以确保稳定
     projector->stop();
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     
@@ -1337,29 +1344,16 @@ void testProjectorWhitePatternProjection() {
     std::cout << "✓ 连续投影模式重新启动成功" << std::endl;
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     
-    // 步进到第一帧（完全按照Projector_Crmera_test.cpp）
-    std::cout << "➤ 步进到第一帧..." << std::endl;
-    if (!projector->step()) {
-        std::cerr << "步进失败" << std::endl;
-        projector->stop();
-        projector->disConnect();
-        assertTrue(false, "步进失败");
-        return;
-    }
-    std::cout << "✓ 步进成功，正在显示全白图案" << std::endl;
-    
-    // 暂停以避免自动循环（完全按照Projector_Crmera_test.cpp）
+    // 暂停投影（关键：先暂停，不要先step）
     std::cout << "➤ 暂停投影，保持当前帧稳定显示..." << std::endl;
     projector->pause();
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
     
-    // 关键：增加更长的稳定时间（完全按照Projector_Crmera_test.cpp）
-    std::cout << "➤ 等待投影完全稳定（8秒）..." << std::endl;
-    std::this_thread::sleep_for(std::chrono::milliseconds(8000));
-    
-    // 额外的暂停确认（完全按照Projector_Crmera_test.cpp）
-    std::cout << "➤ 确认投影仪暂停状态..." << std::endl;
-    projector->pause(); // 再次确认暂停状态
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+    // 验证LED电流设置（调试信息）
+    double red, green, blue;
+    if (projector->getLEDCurrent(red, green, blue)) {
+        std::cout << "✓ LED电流: R=" << red << " G=" << green << " B=" << blue << std::endl;
+    }
     
     std::cout << "\n" << std::string(60, '=') << std::endl;
     std::cout << "  🎯 全白图案投影已启动！" << std::endl;
@@ -1489,39 +1483,37 @@ void testProjectorStepWithGeneratedHorizontalFringesKeyTrigger() {
     assertTrue(isSucess, "重新加载图案数据成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
 
-    // 设置LED电流并等待稳定（增加稳定时间减少频闪）
-    std::cout << "设置LED电流并等待稳定..." << std::endl;
+    // 设置LED电流（完全按照ProjectorWithCamera.cpp的稳定方法）
+    std::cout << "设置LED电流..." << std::endl;
     projectorDlpcApi->setLEDCurrent(0.9, 0.9, 0.9);
-    std::this_thread::sleep_for(std::chrono::milliseconds(1000)); // 增加到1秒
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
     
-    // 验证LED电流设置
-    double currentRed, currentGreen, currentBlue;
-    if (projectorDlpcApi->getLEDCurrent(currentRed, currentGreen, currentBlue)) {
-        std::cout << "LED电流设置: R=" << currentRed << " G=" << currentGreen << " B=" << currentBlue << std::endl;
-    } else {
-        std::cout << "警告: 无法验证LED电流设置" << std::endl;
-    }
-    
-    // 启动连续投影模式
+    // 启动连续投影模式（关键：等待2000ms让投影仪完全稳定）
     std::cout << "启动连续投影模式..." << std::endl;
     isSucess = projectorDlpcApi->project(true);
     assertTrue(isSucess, "连续投影模式启动成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
-    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000)); // 关键：充分等待
     
     // 停止并重新启动以确保稳定
     projectorDlpcApi->stop();
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     
     isSucess = projectorDlpcApi->project(true);
-    assertTrue(isSucess, "重新启动连续投影模式成功");
+    assertTrue(isSucess, "重新启动连续投影成功");
     if (!isSucess) { projectorDlpcApi->disConnect(); return; }
     std::this_thread::sleep_for(std::chrono::milliseconds(1000));
     
-    // 暂停投影，准备步进控制
+    // 暂停投影，准备步进控制（关键：先暂停，不要先step）
     std::cout << "暂停投影，准备步进控制..." << std::endl;
     projectorDlpcApi->pause();
-    std::this_thread::sleep_for(std::chrono::milliseconds(5000)); // 增加到5秒
+    std::this_thread::sleep_for(std::chrono::milliseconds(2000));
+    
+    // 验证LED电流设置（调试信息）
+    double currentRed, currentGreen, currentBlue;
+    if (projectorDlpcApi->getLEDCurrent(currentRed, currentGreen, currentBlue)) {
+        std::cout << "LED电流: R=" << currentRed << " G=" << currentGreen << " B=" << currentBlue << std::endl;
+    }
 
     const int totalFrames = steps;
     std::cout << "开始按键触发步进投影水平条纹，总共 " << totalFrames << " 帧..." << std::endl;
