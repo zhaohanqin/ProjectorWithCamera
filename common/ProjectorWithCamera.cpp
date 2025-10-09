@@ -736,10 +736,15 @@ bool runVerticalProjectStepAndCapture(
                     continue;
                 }
                 
+                // 关键修复：步进后需要短暂resume再pause来刷新投影仪内部状态
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                std::cout << "[验证] 刷新投影仪状态（resume->pause）..." << std::endl;
+                projector->resume();  // 恢复播放
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));  // 让投影仪更新状态
+                projector->pause();   // 重新暂停
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                projector->pause();
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                std::cout << "[验证] 已步进，准备下一次验证..." << std::endl;
+                
+                std::cout << "[验证] 已步进并刷新状态，准备下一次验证..." << std::endl;
             }
         }
         
@@ -1036,10 +1041,15 @@ bool runHorizontalProjectStepAndCapture(
                     continue;
                 }
                 
+                // 关键修复：步进后需要短暂resume再pause来刷新投影仪内部状态
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                std::cout << "[验证] 刷新投影仪状态（resume->pause）..." << std::endl;
+                projector->resume();  // 恢复播放
+                std::this_thread::sleep_for(std::chrono::milliseconds(200));  // 让投影仪更新状态
+                projector->pause();   // 重新暂停
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                projector->pause();
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                std::cout << "[验证] 已步进，准备下一次验证..." << std::endl;
+                
+                std::cout << "[验证] 已步进并刷新状态，准备下一次验证..." << std::endl;
             }
         }
         
