@@ -701,11 +701,61 @@ bool runVerticalProjectStepAndCapture(
         projector->pause();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
-        // ===== 简化可靠方案：投影仪启动后默认从第一帧开始 =====
-        // 根据DLP投影仪的工作原理，project(true)启动后会自动从索引0开始
-        // getCurrentPatternIndex()返回的是累积计数器，不是循环索引，不适合用于验证
-        std::cout << "[垂直] 投影仪已启动并暂停，默认从第一帧开始" << std::endl;
-        std::cout << "[垂直] 说明：DLP投影仪启动后会自动复位到第一帧（索引0）" << std::endl;
+        // ===== 数学计算法：通过模运算计算真实循环索引并步进到索引0 =====
+        std::cout << "[垂直] 投影仪已启动并暂停，开始计算当前帧位置..." << std::endl;
+        
+        // 1. 读取累积计数器
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        int accumulatedCount = projector->getCurrentPatternIndex();
+        
+        if (accumulatedCount < 0) {
+            std::cerr << "[垂直] 无法获取当前帧索引，假设从索引0开始" << std::endl;
+            accumulatedCount = 0;
+        }
+        
+        std::cout << "[垂直] 累积计数器值: " << accumulatedCount << std::endl;
+        
+        // 2. 计算真实的循环索引（使用模运算）
+        int realIndex = accumulatedCount % steps;
+        std::cout << "[垂直] 真实循环索引: " << realIndex << " (对应第" << (realIndex + 1) << "帧)" << std::endl;
+        
+        // 3. 计算需要步进的次数才能到达索引0
+        int stepsToFirstFrame = 0;
+        if (realIndex != 0) {
+            stepsToFirstFrame = steps - realIndex;
+            std::cout << "[垂直] 需要步进 " << stepsToFirstFrame << " 次才能回到第一帧（索引0）" << std::endl;
+        } else {
+            std::cout << "✓ [垂直] 当前已在第一帧（索引0），无需步进" << std::endl;
+        }
+        
+        // 4. 执行精确的步进次数
+        for (int i = 0; i < stepsToFirstFrame; ++i) {
+            std::cout << "[垂直] 执行第 " << (i + 1) << "/" << stepsToFirstFrame << " 次步进..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            
+            if (!projector->step()) {
+                std::cerr << "[垂直] 步进失败" << std::endl;
+                projector->stop();
+                projector->disConnect();
+                return false;
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            projector->pause();  // 暂停在当前帧
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
+        
+        // 5. 步进完成（数学保证正确性，不依赖硬件状态验证）
+        std::cout << "✓ [垂直] 步进完成，根据数学计算已到达第一帧（索引0）" << std::endl;
+        std::cout << "[垂直] 说明：步进了 " << stepsToFirstFrame 
+                  << " 次，从索引" << realIndex << "到达索引0" << std::endl;
+        
+        // 可选：读取累积计数用于调试（不影响逻辑）
+        int finalAccumulatedCount = projector->getCurrentPatternIndex();
+        if (finalAccumulatedCount >= 0) {
+            std::cout << "[垂直] [调试信息] 当前累积计数: " << finalAccumulatedCount 
+                      << " (理论循环索引: " << (finalAccumulatedCount % steps) << ")" << std::endl;
+        }
 
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10,
@@ -956,11 +1006,61 @@ bool runHorizontalProjectStepAndCapture(
         projector->pause();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
-        // ===== 简化可靠方案：投影仪启动后默认从第一帧开始 =====
-        // 根据DLP投影仪的工作原理，project(true)启动后会自动从索引0开始
-        // getCurrentPatternIndex()返回的是累积计数器，不是循环索引，不适合用于验证
-        std::cout << "[水平] 投影仪已启动并暂停，默认从第一帧开始" << std::endl;
-        std::cout << "[水平] 说明：DLP投影仪启动后会自动复位到第一帧（索引0）" << std::endl;
+        // ===== 数学计算法：通过模运算计算真实循环索引并步进到索引0 =====
+        std::cout << "[水平] 投影仪已启动并暂停，开始计算当前帧位置..." << std::endl;
+        
+        // 1. 读取累积计数器
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        int accumulatedCount = projector->getCurrentPatternIndex();
+        
+        if (accumulatedCount < 0) {
+            std::cerr << "[水平] 无法获取当前帧索引，假设从索引0开始" << std::endl;
+            accumulatedCount = 0;
+        }
+        
+        std::cout << "[水平] 累积计数器值: " << accumulatedCount << std::endl;
+        
+        // 2. 计算真实的循环索引（使用模运算）
+        int realIndex = accumulatedCount % steps;
+        std::cout << "[水平] 真实循环索引: " << realIndex << " (对应第" << (realIndex + 1) << "帧)" << std::endl;
+        
+        // 3. 计算需要步进的次数才能到达索引0
+        int stepsToFirstFrame = 0;
+        if (realIndex != 0) {
+            stepsToFirstFrame = steps - realIndex;
+            std::cout << "[水平] 需要步进 " << stepsToFirstFrame << " 次才能回到第一帧（索引0）" << std::endl;
+        } else {
+            std::cout << "✓ [水平] 当前已在第一帧（索引0），无需步进" << std::endl;
+        }
+        
+        // 4. 执行精确的步进次数
+        for (int i = 0; i < stepsToFirstFrame; ++i) {
+            std::cout << "[水平] 执行第 " << (i + 1) << "/" << stepsToFirstFrame << " 次步进..." << std::endl;
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            
+            if (!projector->step()) {
+                std::cerr << "[水平] 步进失败" << std::endl;
+                projector->stop();
+                projector->disConnect();
+                return false;
+            }
+            
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            projector->pause();  // 暂停在当前帧
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        }
+        
+        // 5. 步进完成（数学保证正确性，不依赖硬件状态验证）
+        std::cout << "✓ [水平] 步进完成，根据数学计算已到达第一帧（索引0）" << std::endl;
+        std::cout << "[水平] 说明：步进了 " << stepsToFirstFrame 
+                  << " 次，从索引" << realIndex << "到达索引0" << std::endl;
+        
+        // 可选：读取累积计数用于调试（不影响逻辑）
+        int finalAccumulatedCount = projector->getCurrentPatternIndex();
+        if (finalAccumulatedCount >= 0) {
+            std::cout << "[水平] [调试信息] 当前累积计数: " << finalAccumulatedCount 
+                      << " (理论循环索引: " << (finalAccumulatedCount % steps) << ")" << std::endl;
+        }
         
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10, 
