@@ -602,6 +602,26 @@ bool runVerticalProjectStepAndCapture(
         }
         std::cout << "成功生成 " << steps << " 张垂直条纹图像" << std::endl;
         
+        // ===== 保存生成的垂直条纹图像到调试文件夹 =====
+        std::string debugDir = (std::filesystem::path(saveDir) / "debug_fringe_images").string();
+        try {
+            std::filesystem::create_directories(debugDir);
+            std::cout << "\n[调试] 保存生成的垂直条纹图像到: " << debugDir << std::endl;
+            
+            // 垂直条纹保存为 I1-I4
+            for (int i = 0; i < steps; ++i) {
+                std::string debugPath = (std::filesystem::path(debugDir) / ("I" + std::to_string(i + 1) + ".png")).string();
+                if (cv::imwrite(debugPath, imgs[i])) {
+                    std::cout << "[调试] 已保存: I" << (i + 1) << ".png (垂直条纹)" << std::endl;
+                } else {
+                    std::cerr << "[调试] 保存失败: I" << (i + 1) << ".png" << std::endl;
+                }
+            }
+            std::cout << "[调试] 垂直条纹图像保存完成（I1-I" << steps << "）！" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[调试] 保存垂直条纹图像时出现异常: " << e.what() << std::endl;
+        }
+        
         std::vector<PatternOrderSet> patternSets(1);
         patternSets[0].exposureTime_ = 4000;
         patternSets[0].preExposureTime_ = 3000;
@@ -681,7 +701,56 @@ bool runVerticalProjectStepAndCapture(
         projector->pause();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
-        std::cout << "[垂直] 投影仪已暂停，准备开始采集" << std::endl;
+        std::cout << "[垂直] 投影仪已暂停，开始验证当前帧是否为第一帧..." << std::endl;
+        
+        // ===== 验证并步进到第一帧（索引0） =====
+        bool isAtFirstFrame = false;
+        int verificationAttempts = 0;
+        const int maxVerificationAttempts = 20;  // 最多尝试20次
+        
+        while (!isAtFirstFrame && verificationAttempts < maxVerificationAttempts) {
+            verificationAttempts++;
+            
+            // 获取当前帧索引
+            int currentIndex = projector->getCurrentPatternIndex();
+            
+            if (currentIndex < 0) {
+                std::cerr << "[验证第" << verificationAttempts << "次] 无法获取当前帧索引，等待后重试..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                continue;
+            }
+            
+            std::cout << "[验证第" << verificationAttempts << "次] 当前帧索引: " << currentIndex << std::endl;
+            
+            if (currentIndex == 0) {
+                std::cout << "✓ [验证成功] 当前显示的是第一帧（索引0）！" << std::endl;
+                isAtFirstFrame = true;
+            } else {
+                std::cout << "✗ [验证失败] 当前显示的是第" << (currentIndex + 1) << "帧，执行步进到第一帧..." << std::endl;
+                
+                // 步进到下一帧
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                if (!projector->step()) {
+                    std::cerr << "[验证] 步进失败，等待后重试..." << std::endl;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                    continue;
+                }
+                
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                projector->pause();
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                std::cout << "[验证] 已步进，准备下一次验证..." << std::endl;
+            }
+        }
+        
+        if (!isAtFirstFrame) {
+            std::cerr << "✗ [验证失败] 达到最大验证次数(" << maxVerificationAttempts << ")，无法确认当前帧为第一帧" << std::endl;
+            projector->stop();
+            projector->disConnect();
+            return false;
+        }
+        
+        std::cout << "[垂直] 验证完成，当前显示第一帧，准备开始采集" << std::endl;
 
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10,
@@ -833,6 +902,26 @@ bool runHorizontalProjectStepAndCapture(
         }
         std::cout << "成功生成 " << steps << " 张水平条纹图像" << std::endl;
         
+        // ===== 保存生成的水平条纹图像到调试文件夹 =====
+        std::string debugDir = (std::filesystem::path(saveDir) / "debug_fringe_images").string();
+        try {
+            std::filesystem::create_directories(debugDir);
+            std::cout << "\n[调试] 保存生成的水平条纹图像到: " << debugDir << std::endl;
+            
+            // 水平条纹保存为 I5-I8（水平条纹是imgs数组的后N张）
+            for (int i = 0; i < steps; ++i) {
+                std::string debugPath = (std::filesystem::path(debugDir) / ("I" + std::to_string(steps + i + 1) + ".png")).string();
+                if (cv::imwrite(debugPath, imgs[steps + i])) {
+                    std::cout << "[调试] 已保存: I" << (steps + i + 1) << ".png (水平条纹)" << std::endl;
+                } else {
+                    std::cerr << "[调试] 保存失败: I" << (steps + i + 1) << ".png" << std::endl;
+                }
+            }
+            std::cout << "[调试] 水平条纹图像保存完成（I" << (steps + 1) << "-I" << (steps * 2) << "）！" << std::endl;
+        } catch (const std::exception& e) {
+            std::cerr << "[调试] 保存水平条纹图像时出现异常: " << e.what() << std::endl;
+        }
+        
         std::vector<PatternOrderSet> patternSets(1);
         patternSets[0].exposureTime_ = 4000;
         patternSets[0].preExposureTime_ = 3000;
@@ -912,7 +1001,56 @@ bool runHorizontalProjectStepAndCapture(
         projector->pause();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
-        std::cout << "[水平] 投影仪已暂停，准备开始采集" << std::endl;
+        std::cout << "[水平] 投影仪已暂停，开始验证当前帧是否为第一帧..." << std::endl;
+        
+        // ===== 验证并步进到第一帧（索引0） =====
+        bool isAtFirstFrame = false;
+        int verificationAttempts = 0;
+        const int maxVerificationAttempts = 20;  // 最多尝试20次
+        
+        while (!isAtFirstFrame && verificationAttempts < maxVerificationAttempts) {
+            verificationAttempts++;
+            
+            // 获取当前帧索引
+            int currentIndex = projector->getCurrentPatternIndex();
+            
+            if (currentIndex < 0) {
+                std::cerr << "[验证第" << verificationAttempts << "次] 无法获取当前帧索引，等待后重试..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                continue;
+            }
+            
+            std::cout << "[验证第" << verificationAttempts << "次] 当前帧索引: " << currentIndex << std::endl;
+            
+            if (currentIndex == 0) {
+                std::cout << "✓ [验证成功] 当前显示的是第一帧（索引0）！" << std::endl;
+                isAtFirstFrame = true;
+            } else {
+                std::cout << "✗ [验证失败] 当前显示的是第" << (currentIndex + 1) << "帧，执行步进到第一帧..." << std::endl;
+                
+                // 步进到下一帧
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                if (!projector->step()) {
+                    std::cerr << "[验证] 步进失败，等待后重试..." << std::endl;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+                    continue;
+                }
+                
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                projector->pause();
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                std::cout << "[验证] 已步进，准备下一次验证..." << std::endl;
+            }
+        }
+        
+        if (!isAtFirstFrame) {
+            std::cerr << "✗ [验证失败] 达到最大验证次数(" << maxVerificationAttempts << ")，无法确认当前帧为第一帧" << std::endl;
+            projector->stop();
+            projector->disConnect();
+            return false;
+        }
+        
+        std::cout << "[水平] 验证完成，当前显示第一帧，准备开始采集" << std::endl;
         
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10, 

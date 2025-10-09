@@ -283,6 +283,19 @@ int ProjectorDlpc34xxDual::getFlashImgsNum() {
     return status.NumPatDisplayedFromPatSet;
 }
 
+int ProjectorDlpc34xxDual::getCurrentPatternIndex() {
+    if (!isConnect()) {
+        return -1;
+    }
+
+    DLPC34XX_DUAL_InternalPatternStatus_s status;
+    if(DLPC34XX_DUAL_ReadInternalPatternStatus(&status) != SUCCESS) {
+        return -1;
+    }
+
+    return static_cast<int>(status.NumPatDisplayedFromPatSet);
+}
+
 ProjectorDlpc34xxDual::~ProjectorDlpc34xxDual() {
 
 }

@@ -146,6 +146,13 @@ class DEVICE_API Projector {
      * @return int 图片数量
      */
     virtual int getFlashImgsNum() = 0;
+    /**
+     * @brief 获取当前显示的图案索引（在当前图案集中）
+     * @warning 仅在内部图案模式下有效
+     *
+     * @return int 当前显示的图案索引（0-based），失败返回-1
+     */
+    virtual int getCurrentPatternIndex() = 0;
 
   private:
 };

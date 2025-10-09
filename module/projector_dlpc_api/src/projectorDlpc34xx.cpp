@@ -281,6 +281,19 @@ int ProjectorDlpc34xx::getFlashImgsNum() {
     return status.NumPatDisplayedFromPatSet;
 }
 
+int ProjectorDlpc34xx::getCurrentPatternIndex() {
+    if(!isInitial_) {
+        return -1;
+    }
+
+    DLPC34XX_InternalPatternStatus_s status;
+    if(DLPC34XX_ReadInternalPatternStatus(&status) != SUCCESS) {
+        return -1;
+    }
+
+    return static_cast<int>(status.NumPatDisplayedFromPatSet);
+}
+
 ProjectorDlpc34xx::~ProjectorDlpc34xx() {
 }
 

@@ -126,6 +126,13 @@ class DEVICE_API ProjectorDlpc34xx : public Projector {
      * @return int 图片数量
      */
     int getFlashImgsNum() override;
+    /**
+     * @brief 获取当前显示的图案索引（在当前图案集中）
+     * @warning 仅在内部图案模式下有效
+     *
+     * @return int 当前显示的图案索引（0-based），失败返回-1
+     */
+    int getCurrentPatternIndex() override;
   private:
     /**
      * @brief 初始化Cypress USB-Serial和DLPC控制器
