@@ -701,61 +701,11 @@ bool runVerticalProjectStepAndCapture(
         projector->pause();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
-        std::cout << "[垂直] 投影仪已暂停，开始验证当前帧是否为第一帧..." << std::endl;
-        
-        // ===== 验证并步进到第一帧（索引0） =====
-        bool isAtFirstFrame = false;
-        int verificationAttempts = 0;
-        const int maxVerificationAttempts = 20;  // 最多尝试20次
-        
-        while (!isAtFirstFrame && verificationAttempts < maxVerificationAttempts) {
-            verificationAttempts++;
-            
-            // 获取当前帧索引
-            int currentIndex = projector->getCurrentPatternIndex();
-            
-            if (currentIndex < 0) {
-                std::cerr << "[验证第" << verificationAttempts << "次] 无法获取当前帧索引，等待后重试..." << std::endl;
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                continue;
-            }
-            
-            std::cout << "[验证第" << verificationAttempts << "次] 当前帧索引: " << currentIndex << std::endl;
-            
-            if (currentIndex == 0) {
-                std::cout << "✓ [验证成功] 当前显示的是第一帧（索引0）！" << std::endl;
-                isAtFirstFrame = true;
-            } else {
-                std::cout << "✗ [验证失败] 当前显示的是第" << (currentIndex + 1) << "帧，执行步进到第一帧..." << std::endl;
-                
-                // 步进到下一帧
-                std::this_thread::sleep_for(std::chrono::milliseconds(300));
-                if (!projector->step()) {
-                    std::cerr << "[验证] 步进失败，等待后重试..." << std::endl;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                    continue;
-                }
-                
-                // 关键修复：步进后需要短暂resume再pause来刷新投影仪内部状态
-                std::this_thread::sleep_for(std::chrono::milliseconds(300));
-                std::cout << "[验证] 刷新投影仪状态（resume->pause）..." << std::endl;
-                projector->resume();  // 恢复播放
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));  // 让投影仪更新状态
-                projector->pause();   // 重新暂停
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                
-                std::cout << "[验证] 已步进并刷新状态，准备下一次验证..." << std::endl;
-            }
-        }
-        
-        if (!isAtFirstFrame) {
-            std::cerr << "✗ [验证失败] 达到最大验证次数(" << maxVerificationAttempts << ")，无法确认当前帧为第一帧" << std::endl;
-            projector->stop();
-            projector->disConnect();
-            return false;
-        }
-        
-        std::cout << "[垂直] 验证完成，当前显示第一帧，准备开始采集" << std::endl;
+        // ===== 简化可靠方案：投影仪启动后默认从第一帧开始 =====
+        // 根据DLP投影仪的工作原理，project(true)启动后会自动从索引0开始
+        // getCurrentPatternIndex()返回的是累积计数器，不是循环索引，不适合用于验证
+        std::cout << "[垂直] 投影仪已启动并暂停，默认从第一帧开始" << std::endl;
+        std::cout << "[垂直] 说明：DLP投影仪启动后会自动复位到第一帧（索引0）" << std::endl;
 
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10,
@@ -1006,61 +956,11 @@ bool runHorizontalProjectStepAndCapture(
         projector->pause();
         std::this_thread::sleep_for(std::chrono::milliseconds(1000));
         
-        std::cout << "[水平] 投影仪已暂停，开始验证当前帧是否为第一帧..." << std::endl;
-        
-        // ===== 验证并步进到第一帧（索引0） =====
-        bool isAtFirstFrame = false;
-        int verificationAttempts = 0;
-        const int maxVerificationAttempts = 20;  // 最多尝试20次
-        
-        while (!isAtFirstFrame && verificationAttempts < maxVerificationAttempts) {
-            verificationAttempts++;
-            
-            // 获取当前帧索引
-            int currentIndex = projector->getCurrentPatternIndex();
-            
-            if (currentIndex < 0) {
-                std::cerr << "[验证第" << verificationAttempts << "次] 无法获取当前帧索引，等待后重试..." << std::endl;
-                std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                continue;
-            }
-            
-            std::cout << "[验证第" << verificationAttempts << "次] 当前帧索引: " << currentIndex << std::endl;
-            
-            if (currentIndex == 0) {
-                std::cout << "✓ [验证成功] 当前显示的是第一帧（索引0）！" << std::endl;
-                isAtFirstFrame = true;
-            } else {
-                std::cout << "✗ [验证失败] 当前显示的是第" << (currentIndex + 1) << "帧，执行步进到第一帧..." << std::endl;
-                
-                // 步进到下一帧
-                std::this_thread::sleep_for(std::chrono::milliseconds(300));
-                if (!projector->step()) {
-                    std::cerr << "[验证] 步进失败，等待后重试..." << std::endl;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-                    continue;
-                }
-                
-                // 关键修复：步进后需要短暂resume再pause来刷新投影仪内部状态
-                std::this_thread::sleep_for(std::chrono::milliseconds(300));
-                std::cout << "[验证] 刷新投影仪状态（resume->pause）..." << std::endl;
-                projector->resume();  // 恢复播放
-                std::this_thread::sleep_for(std::chrono::milliseconds(200));  // 让投影仪更新状态
-                projector->pause();   // 重新暂停
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                
-                std::cout << "[验证] 已步进并刷新状态，准备下一次验证..." << std::endl;
-            }
-        }
-        
-        if (!isAtFirstFrame) {
-            std::cerr << "✗ [验证失败] 达到最大验证次数(" << maxVerificationAttempts << ")，无法确认当前帧为第一帧" << std::endl;
-            projector->stop();
-            projector->disConnect();
-            return false;
-        }
-        
-        std::cout << "[水平] 验证完成，当前显示第一帧，准备开始采集" << std::endl;
+        // ===== 简化可靠方案：投影仪启动后默认从第一帧开始 =====
+        // 根据DLP投影仪的工作原理，project(true)启动后会自动从索引0开始
+        // getCurrentPatternIndex()返回的是累积计数器，不是循环索引，不适合用于验证
+        std::cout << "[水平] 投影仪已启动并暂停，默认从第一帧开始" << std::endl;
+        std::cout << "[水平] 说明：DLP投影仪启动后会自动复位到第一帧（索引0）" << std::endl;
         
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10, 
