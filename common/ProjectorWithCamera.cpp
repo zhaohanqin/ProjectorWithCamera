@@ -571,7 +571,6 @@ bool runVerticalProjectStepAndCapture(
         
         // 确保参数在合理范围内
         if (params.exposureTimeUs < 5000.0f) params.exposureTimeUs = 5000.0f;
-        if (params.gainValue < 3.0f) params.gainValue = 3.0f;
         
         // 显示相机参数
         std::cout << "相机参数: 曝光=" << params.exposureTimeUs << "μs, 增益=" << params.gainValue 
@@ -622,8 +621,11 @@ bool runVerticalProjectStepAndCapture(
             std::cerr << "[调试] 保存垂直条纹图像时出现异常: " << e.what() << std::endl;
         }
         
+        // ===== 简化流程：装载图案并设置LED =====
+        std::cout << "\n=== 准备投影仪图案和LED ===" << std::endl;
+        
         std::vector<PatternOrderSet> patternSets(1);
-        patternSets[0].exposureTime_ = 4000;
+        patternSets[0].exposureTime_ = 8000;
         patternSets[0].preExposureTime_ = 3000;
         patternSets[0].postExposureTime_ = 3000;
         patternSets[0].illumination_ = Blue;
@@ -632,26 +634,8 @@ bool runVerticalProjectStepAndCapture(
         patternSets[0].isOneBit_ = false;
         patternSets[0].patternArrayCounts_ = deviceWidth;
         patternSets[0].imgs_.assign(imgs.begin(), imgs.begin() + steps);
-
-        // ===== 关键修复：彻底清除旧图案并装载新图案 =====
-        std::cout << "正在清除投影仪旧图案表..." << std::endl;
-        projector->stop();
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
-        // 完全断开连接以清除缓存
-        projector->disConnect();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-        
-        // 重新连接并装载新图案
-        std::cout << "重新连接投影仪并装载新图案表..." << std::endl;
-        if (!projector->connect()) { 
-            std::cerr << "重新连接投影仪失败" << std::endl;
-            projector->disConnect(); 
-            return false; 
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        
-        // 装载新的图案数据（这会写入Flash）
+        // 装载图案表
         std::cout << "装载图案表（参数：频率=" << frequency << ", 强度=" << intensity 
                   << ", 偏移=" << offset << "）..." << std::endl;
         if (!projector->populatePatternTableData(patternSets)) {
@@ -659,126 +643,55 @@ bool runVerticalProjectStepAndCapture(
             projector->disConnect(); 
             return false;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        
-        // 投影仪稳定流程：二次确认图案已加载
-        std::cout << "执行投影仪稳定流程（二次验证图案）..." << std::endl;
-        projector->stop();
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        projector->disConnect();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-        
-        if (!projector->connect()) { 
-            std::cerr << "二次连接投影仪失败" << std::endl;
-            projector->disConnect(); 
-            return false; 
-        }
+        std::cout << "图案表装载成功" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
-        // 再次装载确保图案完全写入Flash
-        if (!projector->populatePatternTableData(patternSets)) { 
-            std::cerr << "二次装载图案表失败" << std::endl;
-            projector->disConnect(); 
-            return false; 
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        
-        // ===== 简化方案：直接启动并暂停，开始采集 =====
-        std::cout << "\n=== 配置LED并启动投影 ===" << std::endl;
+        // 设置LED电流
+        std::cout << "配置LED电流..." << std::endl;
         projector->setLEDCurrent(0.9, 0.9, 0.9);
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
-        // 启动投影并立即暂停（投影仪应从第0帧开始）
-        std::cout << "[垂直] 启动投影仪并暂停..." << std::endl;
+        // ===== 关键：直接启动步进模式（启动后立即暂停） =====
+        std::cout << "\n=== 启动步进模式 ===" << std::endl;
+        std::cout << "[垂直] 启动投影仪（步进模式）..." << std::endl;
+        
         if (!projector->project(true)) { 
             std::cerr << "[垂直] 启动投影失败" << std::endl;
             projector->disConnect(); 
             return false; 
         }
         
-        // 立即暂停，确保投影仪停在初始帧
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // 立即暂停，进入步进模式（投影仪会停在第一帧）
+        // std::this_thread::sleep_for(std::chrono::milliseconds(200));
         projector->pause();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        std::cout << "[垂直] 投影仪已进入步进模式（暂停状态）" << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
         
-        // ===== 数学计算法：通过模运算计算真实循环索引并步进到索引0 =====
-        std::cout << "[垂直] 投影仪已启动并暂停，开始计算当前帧位置..." << std::endl;
-        
-        // 1. 读取累积计数器
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        int accumulatedCount = projector->getCurrentPatternIndex();
-        
-        if (accumulatedCount < 0) {
-            std::cerr << "[垂直] 无法获取当前帧索引，假设从索引0开始" << std::endl;
-            accumulatedCount = 0;
-        }
-        
-        std::cout << "[垂直] 累积计数器值: " << accumulatedCount << std::endl;
-        
-        // 2. 计算真实的循环索引（使用模运算）
-        int realIndex = accumulatedCount % steps;
-        std::cout << "[垂直] 真实循环索引: " << realIndex << " (对应第" << (realIndex + 1) << "帧)" << std::endl;
-        
-        // 3. 计算需要步进的次数才能到达索引0
-        int stepsToFirstFrame = 0;
-        if (realIndex != 0) {
-            stepsToFirstFrame = steps - realIndex;
-            std::cout << "[垂直] 需要步进 " << stepsToFirstFrame << " 次才能回到第一帧（索引0）" << std::endl;
-        } else {
-            std::cout << "✓ [垂直] 当前已在第一帧（索引0），无需步进" << std::endl;
-        }
-        
-        // 4. 执行精确的步进次数
-        for (int i = 0; i < stepsToFirstFrame; ++i) {
-            std::cout << "[垂直] 执行第 " << (i + 1) << "/" << stepsToFirstFrame << " 次步进..." << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            
-            if (!projector->step()) {
-                std::cerr << "[垂直] 步进失败" << std::endl;
-                projector->stop();
-                projector->disConnect();
-                return false;
-            }
-            
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            projector->pause();  // 暂停在当前帧
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-        }
-        
-        // 5. 步进完成（数学保证正确性，不依赖硬件状态验证）
-        std::cout << "✓ [垂直] 步进完成，根据数学计算已到达第一帧（索引0）" << std::endl;
-        std::cout << "[垂直] 说明：步进了 " << stepsToFirstFrame 
-                  << " 次，从索引" << realIndex << "到达索引0" << std::endl;
-        
-        // 可选：读取累积计数用于调试（不影响逻辑）
-        int finalAccumulatedCount = projector->getCurrentPatternIndex();
-        if (finalAccumulatedCount >= 0) {
-            std::cout << "[垂直] [调试信息] 当前累积计数: " << finalAccumulatedCount 
-                      << " (理论循环索引: " << (finalAccumulatedCount % steps) << ")" << std::endl;
-        }
+        std::cout << "✓ [垂直] 投影仪准备就绪，开始采集流程" << std::endl;
+        std::cout << "[垂直] 采集策略：从第一帧开始，每次采集后步进到下一帧" << std::endl;
 
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10,
             50
         );
 
-        // 主循环：开始拍摄
-        std::cout << "\n=== 开始垂直条纹拍摄 ===" << std::endl;
+        // ===== 主循环：步进式采集 =====
+        std::cout << "\n=== 开始垂直条纹采集 ===" << std::endl;
         std::cout << "步数: " << steps << ", 步进等待时间: " << waitMs << "ms" << std::endl;
-        std::cout << "采集策略: 拍摄当前帧 → 步进 → 拍摄下一帧（4步相移）" << std::endl;
+        std::cout << "采集策略: 采集当前帧 → 步进到下一帧 → 循环" << std::endl;
 
         bool allSuccess = true;
         for (int i = 0; i < steps; ++i) {
             std::cout << "\n--- 第 " << (i+1) << "/" << steps << " 帧 (相位: " << (i * 90) << "°) ---" << std::endl;
             
-            // 等待投影仪稳定
+            // 等待投影仪稳定（第一帧需要更长时间）
             if (i == 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1500));
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
             }
 
-            // 先拍摄当前帧 - 垂直条纹命名为 I1-IN
+            // 采集当前帧 - 垂直条纹命名为 I1-I4
             std::string outputPath = (std::filesystem::path(saveDir) / ("I" + std::to_string(i+1) + ".png")).string();
             
             bool captureSuccess = false;
@@ -787,35 +700,36 @@ bool runVerticalProjectStepAndCapture(
             
             while (!captureSuccess && captureRetryCount < maxCaptureRetries) {
                 if (captureRetryCount > 0) {
+                    std::cout << "[垂直] 重试第 " << captureRetryCount << " 次..." << std::endl;
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 }
                 
                 captureSuccess = captureSingleImage(cameraSerial, params, outputPath, "V");
                 captureRetryCount++;
                 
-                if (!captureSuccess) {
-                    if (captureRetryCount >= maxCaptureRetries) {
-                        std::cerr << "第 " << (i+1) << " 帧拍摄达到最大重试次数，停止流程" << std::endl;
-                        allSuccess = false;
-                        break;
-                    }
+                if (!captureSuccess && captureRetryCount >= maxCaptureRetries) {
+                    std::cerr << "[垂直] 第 " << (i+1) << " 帧拍摄达到最大重试次数，停止流程" << std::endl;
+                    allSuccess = false;
+                    break;
                 }
             }
             
             if (!captureSuccess) {
-                std::cerr << "拍摄失败，中断流程" << std::endl;
+                std::cerr << "[垂直] 采集失败，中断流程" << std::endl;
                 break;
             }
             
-            // 拍摄成功后，步进到下一帧（为下次循环准备）
+            // 采集成功后，步进到下一帧（为下次循环准备）
             if (i < steps - 1) {  // 最后一帧不需要步进
                 std::cout << "[垂直] 步进到下一帧..." << std::endl;
                 std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                
                 if (!projector->step()) { 
                     std::cerr << "[垂直] 步进失败" << std::endl; 
                     allSuccess = false;
                     break; 
                 }
+                
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 projector->pause();
                 std::this_thread::sleep_for(std::chrono::milliseconds(300));
@@ -876,7 +790,6 @@ bool runHorizontalProjectStepAndCapture(
         
         // 确保参数在合理范围内
         if (params.exposureTimeUs < 5000.0f) params.exposureTimeUs = 5000.0f;
-        if (params.gainValue < 3.0f) params.gainValue = 3.0f;
         
         // 显示相机参数
         std::cout << "相机参数: 曝光=" << params.exposureTimeUs << "μs, 增益=" << params.gainValue 
@@ -927,8 +840,11 @@ bool runHorizontalProjectStepAndCapture(
             std::cerr << "[调试] 保存水平条纹图像时出现异常: " << e.what() << std::endl;
         }
         
+        // ===== 简化流程：装载图案并设置LED =====
+        std::cout << "\n=== 准备投影仪图案和LED ===" << std::endl;
+        
         std::vector<PatternOrderSet> patternSets(1);
-        patternSets[0].exposureTime_ = 4000;
+        patternSets[0].exposureTime_ = 8000;
         patternSets[0].preExposureTime_ = 3000;
         patternSets[0].postExposureTime_ = 3000;
         patternSets[0].illumination_ = Blue;
@@ -937,152 +853,64 @@ bool runHorizontalProjectStepAndCapture(
         patternSets[0].isOneBit_ = false;
         patternSets[0].patternArrayCounts_ = deviceWidth;
         patternSets[0].imgs_.assign(imgs.begin() + steps, imgs.end());
-
-        // ===== 彻底清除旧图案并装载新图案 =====
-        std::cout << "正在清除投影仪旧图案表..." << std::endl;
-        projector->stop();
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
-        // 完全断开连接以清除缓存
-        projector->disConnect();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-        
-        // 重新连接并装载新图案
-        std::cout << "重新连接投影仪并装载新图案表..." << std::endl;
-        if (!projector->connect()) { 
-            std::cerr << "重新连接投影仪失败" << std::endl;
-            projector->disConnect(); 
-            return false; 
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        
-        // 装载新的图案数据（这会写入Flash）
+        // 装载图案表
         std::cout << "装载图案表（参数：频率=" << frequency << ", 强度=" << intensity 
                   << ", 偏移=" << offset << "）..." << std::endl;
         if (!projector->populatePatternTableData(patternSets)) {
             std::cerr << "装载图案表失败" << std::endl;
             projector->disConnect(); 
-            return false; 
+            return false;
         }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        
-        // 投影仪稳定流程：二次确认图案已加载
-        std::cout << "执行投影仪稳定流程（二次验证图案）..." << std::endl;
-        projector->stop();
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        projector->disConnect();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1500));
-        
-        if (!projector->connect()) { 
-            std::cerr << "二次连接投影仪失败" << std::endl;
-            projector->disConnect(); 
-            return false; 
-        }
+        std::cout << "图案表装载成功" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
-        // 再次装载确保图案完全写入Flash
-        if (!projector->populatePatternTableData(patternSets)) { 
-            std::cerr << "二次装载图案表失败" << std::endl;
-            projector->disConnect(); 
-            return false; 
-        }
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
-        
-        // ===== 简化方案：直接启动并暂停，开始采集 =====
-        std::cout << "\n=== 配置LED并启动投影 ===" << std::endl;
+        // 设置LED电流
+        std::cout << "配置LED电流..." << std::endl;
         projector->setLEDCurrent(0.9, 0.9, 0.9);
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
         
-        // 启动投影并立即暂停（投影仪应从第0帧开始）
-        std::cout << "[水平] 启动投影仪并暂停..." << std::endl;
+        // ===== 关键：直接启动步进模式（启动后立即暂停） =====
+        std::cout << "\n=== 启动步进模式 ===" << std::endl;
+        std::cout << "[水平] 启动投影仪（步进模式）..." << std::endl;
+        
         if (!projector->project(true)) { 
             std::cerr << "[水平] 启动投影失败" << std::endl;
             projector->disConnect(); 
             return false; 
         }
         
-        // 立即暂停，确保投影仪停在初始帧
-        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // 立即暂停，进入步进模式（投影仪会停在第一帧）
+        //std::this_thread::sleep_for(std::chrono::milliseconds(200));
         projector->pause();
-        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        std::cout << "[水平] 投影仪已进入步进模式（暂停状态）" << std::endl;
+        std::this_thread::sleep_for(std::chrono::milliseconds(800));
         
-        // ===== 数学计算法：通过模运算计算真实循环索引并步进到索引0 =====
-        std::cout << "[水平] 投影仪已启动并暂停，开始计算当前帧位置..." << std::endl;
-        
-        // 1. 读取累积计数器
-        std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        int accumulatedCount = projector->getCurrentPatternIndex();
-        
-        if (accumulatedCount < 0) {
-            std::cerr << "[水平] 无法获取当前帧索引，假设从索引0开始" << std::endl;
-            accumulatedCount = 0;
-        }
-        
-        std::cout << "[水平] 累积计数器值: " << accumulatedCount << std::endl;
-        
-        // 2. 计算真实的循环索引（使用模运算）
-        int realIndex = accumulatedCount % steps;
-        std::cout << "[水平] 真实循环索引: " << realIndex << " (对应第" << (realIndex + 1) << "帧)" << std::endl;
-        
-        // 3. 计算需要步进的次数才能到达索引0
-        int stepsToFirstFrame = 0;
-        if (realIndex != 0) {
-            stepsToFirstFrame = steps - realIndex;
-            std::cout << "[水平] 需要步进 " << stepsToFirstFrame << " 次才能回到第一帧（索引0）" << std::endl;
-        } else {
-            std::cout << "✓ [水平] 当前已在第一帧（索引0），无需步进" << std::endl;
-        }
-        
-        // 4. 执行精确的步进次数
-        for (int i = 0; i < stepsToFirstFrame; ++i) {
-            std::cout << "[水平] 执行第 " << (i + 1) << "/" << stepsToFirstFrame << " 次步进..." << std::endl;
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-            
-            if (!projector->step()) {
-                std::cerr << "[水平] 步进失败" << std::endl;
-                projector->stop();
-                projector->disConnect();
-                return false;
-            }
-            
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-            projector->pause();  // 暂停在当前帧
-            std::this_thread::sleep_for(std::chrono::milliseconds(300));
-        }
-        
-        // 5. 步进完成（数学保证正确性，不依赖硬件状态验证）
-        std::cout << "✓ [水平] 步进完成，根据数学计算已到达第一帧（索引0）" << std::endl;
-        std::cout << "[水平] 说明：步进了 " << stepsToFirstFrame 
-                  << " 次，从索引" << realIndex << "到达索引0" << std::endl;
-        
-        // 可选：读取累积计数用于调试（不影响逻辑）
-        int finalAccumulatedCount = projector->getCurrentPatternIndex();
-        if (finalAccumulatedCount >= 0) {
-            std::cout << "[水平] [调试信息] 当前累积计数: " << finalAccumulatedCount 
-                      << " (理论循环索引: " << (finalAccumulatedCount % steps) << ")" << std::endl;
-        }
+        std::cout << "✓ [水平] 投影仪准备就绪，开始采集流程" << std::endl;
+        std::cout << "[水平] 采集策略：从第一帧开始，每次采集后步进到下一帧" << std::endl;
         
         int waitMs = std::max(
             (patternSets[0].preExposureTime_ + patternSets[0].exposureTime_ + patternSets[0].postExposureTime_) / 1000 + 10, 
             50
         );
-        // 主循环：开始拍摄
-        std::cout << "\n=== 开始水平条纹拍摄 ===" << std::endl;
+        
+        // ===== 主循环：步进式采集 =====
+        std::cout << "\n=== 开始水平条纹采集 ===" << std::endl;
         std::cout << "步数: " << steps << ", 步进等待时间: " << waitMs << "ms" << std::endl;
-        std::cout << "采集策略: 拍摄当前帧 → 步进 → 拍摄下一帧（4步相移）" << std::endl;
+        std::cout << "采集策略: 采集当前帧 → 步进到下一帧 → 循环" << std::endl;
         
         bool allSuccess = true;
         for (int i = 0; i < steps; ++i) {
             std::cout << "\n--- 第 " << (i+1) << "/" << steps << " 帧 (相位: " << (i * 90) << "°) ---" << std::endl;
             
-            // 等待投影仪稳定
+            // 等待投影仪稳定（第一帧需要更长时间）
             if (i == 0) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(1500));
             } else {
                 std::this_thread::sleep_for(std::chrono::milliseconds(waitMs));
             }
 
-            // 先拍摄当前帧 - 水平条纹命名为 I(N+1)-I(2N)
+            // 采集当前帧 - 水平条纹命名为 I5-I8
             std::string outputPath = (std::filesystem::path(saveDir) / ("I" + std::to_string(steps + i + 1) + ".png")).string();
             
             bool captureSuccess = false;
@@ -1091,35 +919,36 @@ bool runHorizontalProjectStepAndCapture(
             
             while (!captureSuccess && captureRetryCount < maxCaptureRetries) {
                 if (captureRetryCount > 0) {
+                    std::cout << "[水平] 重试第 " << captureRetryCount << " 次..." << std::endl;
                     std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 }
                 
                 captureSuccess = captureSingleImage(cameraSerial, params, outputPath, "H");
                 captureRetryCount++;
                 
-                if (!captureSuccess) {
-                    if (captureRetryCount >= maxCaptureRetries) {
-                        std::cerr << "第 " << (i+1) << " 帧拍摄达到最大重试次数，停止流程" << std::endl;
-                        allSuccess = false;
-                        break;
-                    }
+                if (!captureSuccess && captureRetryCount >= maxCaptureRetries) {
+                    std::cerr << "[水平] 第 " << (i+1) << " 帧拍摄达到最大重试次数，停止流程" << std::endl;
+                    allSuccess = false;
+                    break;
                 }
             }
             
             if (!captureSuccess) {
-                std::cerr << "拍摄失败，中断流程" << std::endl;
+                std::cerr << "[水平] 采集失败，中断流程" << std::endl;
                 break;
             }
             
-            // 拍摄成功后，步进到下一帧（为下次循环准备）
+            // 采集成功后，步进到下一帧（为下次循环准备）
             if (i < steps - 1) {  // 最后一帧不需要步进
                 std::cout << "[水平] 步进到下一帧..." << std::endl;
                 std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                
                 if (!projector->step()) { 
                     std::cerr << "[水平] 步进失败" << std::endl; 
                     allSuccess = false;
                     break; 
                 }
+                
                 std::this_thread::sleep_for(std::chrono::milliseconds(500));
                 projector->pause();
                 std::this_thread::sleep_for(std::chrono::milliseconds(300));
