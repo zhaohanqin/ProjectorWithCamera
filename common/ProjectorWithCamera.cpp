@@ -661,13 +661,63 @@ bool runVerticalProjectStepAndCapture(
             return false; 
         }
         
-        // 立即暂停，进入步进模式（投影仪会停在第一帧）
-        // std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        // 立即暂停，进入步进模式
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
         projector->pause();
         std::cout << "[垂直] 投影仪已进入步进模式（暂停状态）" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(800));
         
-        std::cout << "✓ [垂直] 投影仪准备就绪，开始采集流程" << std::endl;
+        // ===== 读取当前帧索引并步进到第一帧 =====
+        std::cout << "\n=== 验证并对齐到第一帧 ===" << std::endl;
+        int currentIndex = projector->getCurrentPatternIndex();
+        
+        if (currentIndex < 0) {
+            std::cerr << "[垂直] 无法获取当前帧索引" << std::endl;
+            projector->stop();
+            projector->disConnect();
+            return false;
+        }
+        
+        std::cout << "[垂直] 当前帧索引: " << currentIndex << " (第" << (currentIndex + 1) << "帧)" << std::endl;
+        
+        // 计算需要步进的次数到达第一帧（索引0）
+        int stepsToFirstFrame = 0;
+        if (currentIndex != 0) {
+            stepsToFirstFrame = steps - currentIndex;
+            std::cout << "[垂直] 需要步进 " << stepsToFirstFrame << " 次才能到达第一帧（索引0）" << std::endl;
+            
+            // 执行步进
+            for (int i = 0; i < stepsToFirstFrame; ++i) {
+                std::cout << "[垂直] 执行第 " << (i + 1) << "/" << stepsToFirstFrame << " 次步进..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                
+                if (!projector->step()) {
+                    std::cerr << "[垂直] 步进失败" << std::endl;
+                    projector->stop();
+                    projector->disConnect();
+                    return false;
+                }
+                
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                projector->pause();
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            }
+            
+            // 验证最终位置
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            int finalIndex = projector->getCurrentPatternIndex();
+            std::cout << "[垂直] 步进完成，当前帧索引: " << finalIndex << " (第" << (finalIndex + 1) << "帧)" << std::endl;
+            
+            if (finalIndex == 0) {
+                std::cout << "✓ [垂直] 成功对齐到第一帧（索引0）" << std::endl;
+            } else {
+                std::cout << "⚠ [垂直] 警告：当前索引为 " << finalIndex << "，可能存在偏差" << std::endl;
+            }
+        } else {
+            std::cout << "✓ [垂直] 当前已在第一帧（索引0），无需步进" << std::endl;
+        }
+        
+        std::cout << "\n✓ [垂直] 投影仪准备就绪，开始采集流程" << std::endl;
         std::cout << "[垂直] 采集策略：从第一帧开始，每次采集后步进到下一帧" << std::endl;
 
         int waitMs = std::max(
@@ -880,13 +930,63 @@ bool runHorizontalProjectStepAndCapture(
             return false; 
         }
         
-        // 立即暂停，进入步进模式（投影仪会停在第一帧）
-        //std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        // 立即暂停，进入步进模式
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
         projector->pause();
         std::cout << "[水平] 投影仪已进入步进模式（暂停状态）" << std::endl;
         std::this_thread::sleep_for(std::chrono::milliseconds(800));
         
-        std::cout << "✓ [水平] 投影仪准备就绪，开始采集流程" << std::endl;
+        // ===== 读取当前帧索引并步进到第一帧 =====
+        std::cout << "\n=== 验证并对齐到第一帧 ===" << std::endl;
+        int currentIndex = projector->getCurrentPatternIndex();
+        
+        if (currentIndex < 0) {
+            std::cerr << "[水平] 无法获取当前帧索引" << std::endl;
+            projector->stop();
+            projector->disConnect();
+            return false;
+        }
+        
+        std::cout << "[水平] 当前帧索引: " << currentIndex << " (第" << (currentIndex + 1) << "帧)" << std::endl;
+        
+        // 计算需要步进的次数到达第一帧（索引0）
+        int stepsToFirstFrame = 0;
+        if (currentIndex != 0) {
+            stepsToFirstFrame = steps - currentIndex;
+            std::cout << "[水平] 需要步进 " << stepsToFirstFrame << " 次才能到达第一帧（索引0）" << std::endl;
+            
+            // 执行步进
+            for (int i = 0; i < stepsToFirstFrame; ++i) {
+                std::cout << "[水平] 执行第 " << (i + 1) << "/" << stepsToFirstFrame << " 次步进..." << std::endl;
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+                
+                if (!projector->step()) {
+                    std::cerr << "[水平] 步进失败" << std::endl;
+                    projector->stop();
+                    projector->disConnect();
+                    return false;
+                }
+                
+                std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                projector->pause();
+                std::this_thread::sleep_for(std::chrono::milliseconds(300));
+            }
+            
+            // 验证最终位置
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            int finalIndex = projector->getCurrentPatternIndex();
+            std::cout << "[水平] 步进完成，当前帧索引: " << finalIndex << " (第" << (finalIndex + 1) << "帧)" << std::endl;
+            
+            if (finalIndex == 0) {
+                std::cout << "✓ [水平] 成功对齐到第一帧（索引0）" << std::endl;
+            } else {
+                std::cout << "⚠ [水平] 警告：当前索引为 " << finalIndex << "，可能存在偏差" << std::endl;
+            }
+        } else {
+            std::cout << "✓ [水平] 当前已在第一帧（索引0），无需步进" << std::endl;
+        }
+        
+        std::cout << "\n✓ [水平] 投影仪准备就绪，开始采集流程" << std::endl;
         std::cout << "[水平] 采集策略：从第一帧开始，每次采集后步进到下一帧" << std::endl;
         
         int waitMs = std::max(

@@ -291,7 +291,13 @@ int ProjectorDlpc34xx::getCurrentPatternIndex() {
         return -1;
     }
 
-    return static_cast<int>(status.NumPatDisplayedFromPatSet);
+    // 修复：使用模运算计算真实的循环索引
+    // NumPatDisplayedFromPatSet 是累积计数器，需要对当前图案集的图案数量取模
+    if (status.NumPatInCurrentPatSet > 0) {
+        return static_cast<int>(status.NumPatDisplayedFromPatSet % status.NumPatInCurrentPatSet);
+    }
+    
+    return 0;  // 默认返回第一帧
 }
 
 ProjectorDlpc34xx::~ProjectorDlpc34xx() {
